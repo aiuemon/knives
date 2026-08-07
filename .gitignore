@@ -22,3 +22,6 @@ web/.vite/
 
 # Local settings
 .claude/settings.local.json
+
+# Session handoff notes
+.claude/handoff/

@@ -13,48 +13,78 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
+
+	"github.com/aiuemon/knives/internal/cache"
+	"github.com/aiuemon/knives/internal/storage"
 )
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	addr := os.Getenv("REDIRECT_LISTEN_ADDR")
-	if addr == "" {
-		addr = ":8081"
-	}
-
-	r := chi.NewRouter()
-	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
-	r.Use(middleware.Recoverer)
-
-	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-
-	// TODO: internal/cache(Redis cache-aside + ristretto)経由での
-	// short_code -> long_url 解決、302リダイレクト、クリックイベントの
-	// 非同期push(Redis Stream)、プロセス内レート制限(x/time/rate)を実装する。
-	r.Get("/{code}", func(w http.ResponseWriter, r *http.Request) {
-		_ = chi.URLParam(r, "code")
-		http.NotFound(w, r)
-	})
-
-	srv := &http.Server{
-		Addr:              addr,
-		Handler:           r,
-		ReadHeaderTimeout: 5 * time.Second,
+	addr := getenv("REDIRECT_LISTEN_ADDR", ":8081")
+	redisAddr := getenv("REDIS_ADDR", "localhost:6379")
+	databaseURL := os.Getenv("DATABASE_URL")
+	ipHashSalt := os.Getenv("IP_HASH_SALT")
+	if databaseURL == "" {
+		slog.Error("DATABASE_URL is required")
+		os.Exit(1)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		slog.Error("connect to postgres failed", "error", err)
+		os.Exit(1)
+	}
+	defer pool.Close()
+
+	redisClient := redis.NewClient(&redis.Options{Addr: redisAddr})
+	defer redisClient.Close()
+
+	shortURLCache, err := cache.New(cache.Config{Redis: redisClient, InvalidationChannel: "shorturl:invalidate"})
+	if err != nil {
+		slog.Error("cache init failed", "error", err)
+		os.Exit(1)
+	}
 	go func() {
-		slog.Info("redirect server starting", "addr", addr)
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := shortURLCache.Subscribe(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("cache invalidation subscription stopped", "error", err)
+		}
+	}()
+
+	store := storage.NewRedirectStore(pool)
+	domainID, err := store.FindDefaultDomain(ctx)
+	if err != nil {
+		slog.Error("no default domain configured", "error", err)
+		os.Exit(1)
+	}
+
+	limiter := newIPRateLimiter(20, 40) // 6節-0: プロセス内・IPごとのトークンバケット
+	go limiter.cleanupLoop(ctx, 5*time.Minute, 10*time.Minute)
+
+	srv := &server{
+		cache:       shortURLCache,
+		store:       store,
+		redisClient: redisClient,
+		domainID:    domainID,
+		ipHashSalt:  ipHashSalt,
+		limiter:     limiter,
+	}
+
+	httpServer := &http.Server{
+		Addr:              addr,
+		Handler:           srv.routes(),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	go func() {
+		slog.Info("redirect server starting", "addr", addr, "domain_id", domainID)
+		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("redirect server failed", "error", err)
 			os.Exit(1)
 		}
@@ -65,7 +95,14 @@ func main() {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		slog.Error("redirect server shutdown failed", "error", err)
 	}
+}
+
+func getenv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
 }
