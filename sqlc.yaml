@@ -1,0 +1,24 @@
+version: "2"
+sql:
+  - schema: "db/migrations"
+    queries: "internal/storage/queries"
+    engine: "postgresql"
+    gen:
+      go:
+        package: "storage"
+        out: "internal/storage"
+        sql_package: "pgx/v5"
+        emit_json_tags: true
+        emit_interface: true
+        emit_result_struct_pointers: true
+        overrides:
+          - db_type: "uuid"
+            go_type: "github.com/google/uuid.UUID"
+          - db_type: "uuid"
+            go_type: "github.com/google/uuid.NullUUID"
+            nullable: true
+          - db_type: "citext"
+            go_type: "string"
+          - db_type: "citext"
+            go_type: "string"
+            nullable: true
