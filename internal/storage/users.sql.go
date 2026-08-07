@@ -35,6 +35,19 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (*Create
 	return &i, err
 }
 
+const findIsSystemAdmin = `-- name: FindIsSystemAdmin :one
+SELECT is_system_admin
+FROM users
+WHERE id = $1
+`
+
+func (q *Queries) FindIsSystemAdmin(ctx context.Context, id uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, findIsSystemAdmin, id)
+	var is_system_admin bool
+	err := row.Scan(&is_system_admin)
+	return is_system_admin, err
+}
+
 const findUserByEmail = `-- name: FindUserByEmail :one
 SELECT id, email, email_verified
 FROM users

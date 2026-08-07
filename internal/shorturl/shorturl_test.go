@@ -12,11 +12,12 @@ type fakeStore struct {
 	charset string
 	length  int
 	taken   map[string]bool
+	byID    map[uuid.UUID]ShortURL
 	calls   int
 }
 
 func newFakeStore(charset string, length int) *fakeStore {
-	return &fakeStore{charset: charset, length: length, taken: map[string]bool{}}
+	return &fakeStore{charset: charset, length: length, taken: map[string]bool{}, byID: map[uuid.UUID]ShortURL{}}
 }
 
 func (s *fakeStore) ShortCodeSettings(_ context.Context) (string, int, error) {
@@ -31,7 +32,16 @@ func (s *fakeStore) CreateShortURL(_ context.Context, in ShortURL) (*ShortURL, e
 	}
 	s.taken[key] = true
 	in.ID = uuid.New()
+	s.byID[in.ID] = in
 	return &in, nil
+}
+
+func (s *fakeStore) FindByID(_ context.Context, id uuid.UUID) (*ShortURL, error) {
+	su, ok := s.byID[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return &su, nil
 }
 
 func TestCreate_RandomCodeOnFirstAttempt(t *testing.T) {

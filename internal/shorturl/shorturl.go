@@ -21,6 +21,7 @@ import (
 const maxRandomCodeAttempts = 5
 
 var (
+	ErrNotFound       = errors.New("shorturl: not found")
 	ErrInvalidLongURL = errors.New("shorturl: long_url must be an absolute http(s) URL")
 	ErrInvalidAlias   = errors.New("shorturl: alias must be 1-64 characters of letters, digits, '-', '_' or '.'")
 	ErrAliasTaken     = errors.New("shorturl: alias is already in use for this domain")
@@ -88,6 +89,9 @@ type Store interface {
 	// 作成者が自動的にownerとなる). It returns ErrCodeCollision if
 	// (in.DomainID, in.ShortCode) is already taken.
 	CreateShortURL(ctx context.Context, in ShortURL) (*ShortURL, error)
+
+	// FindByID returns ErrNotFound if no short URL with that id exists.
+	FindByID(ctx context.Context, id uuid.UUID) (*ShortURL, error)
 }
 
 type Creator struct {

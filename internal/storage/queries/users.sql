@@ -12,3 +12,8 @@ WHERE id = $1;
 INSERT INTO users (email, email_verified)
 VALUES ($1, $2)
 RETURNING id, email, email_verified;
+
+-- name: FindIsSystemAdmin :one
+SELECT is_system_admin
+FROM users
+WHERE id = $1;

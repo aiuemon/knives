@@ -38,6 +38,32 @@ func (q *Queries) FindRedirectTarget(ctx context.Context, arg FindRedirectTarget
 	return &i, err
 }
 
+const findShortURLByID = `-- name: FindShortURLByID :one
+SELECT id, domain_id, short_code, long_url, title, description, created_by, status, expires_at, source, created_at, updated_at
+FROM short_urls
+WHERE id = $1
+`
+
+func (q *Queries) FindShortURLByID(ctx context.Context, id uuid.UUID) (*ShortUrl, error) {
+	row := q.db.QueryRow(ctx, findShortURLByID, id)
+	var i ShortUrl
+	err := row.Scan(
+		&i.ID,
+		&i.DomainID,
+		&i.ShortCode,
+		&i.LongUrl,
+		&i.Title,
+		&i.Description,
+		&i.CreatedBy,
+		&i.Status,
+		&i.ExpiresAt,
+		&i.Source,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return &i, err
+}
+
 const insertShortURL = `-- name: InsertShortURL :one
 INSERT INTO short_urls (domain_id, short_code, long_url, title, description, created_by, status, expires_at, source)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)

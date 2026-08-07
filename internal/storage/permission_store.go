@@ -33,3 +33,9 @@ func (s *PermissionStore) FindGrant(ctx context.Context, shortURLID, userID uuid
 	}
 	return &permission.Grant{UserID: userID, Role: permission.Role(role)}, nil
 }
+
+// IsSystemAdmin reports users.is_system_admin for userID, needed to build
+// a permission.Subject.
+func (s *PermissionStore) IsSystemAdmin(ctx context.Context, userID uuid.UUID) (bool, error) {
+	return s.Q.FindIsSystemAdmin(ctx, userID)
+}

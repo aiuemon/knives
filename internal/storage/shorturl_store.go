@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -84,6 +85,34 @@ func (s *ShortURLStore) CreateShortURL(ctx context.Context, in shorturl.ShortURL
 	result := in
 	result.ID = id
 	return &result, nil
+}
+
+func (s *ShortURLStore) FindByID(ctx context.Context, id uuid.UUID) (*shorturl.ShortURL, error) {
+	row, err := New(s.pool).FindShortURLByID(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, shorturl.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	var expiresAt *time.Time
+	if row.ExpiresAt.Valid {
+		t := row.ExpiresAt.Time
+		expiresAt = &t
+	}
+	return &shorturl.ShortURL{
+		ID:          row.ID,
+		DomainID:    row.DomainID,
+		ShortCode:   row.ShortCode,
+		LongURL:     row.LongUrl,
+		Title:       row.Title.String,
+		Description: row.Description.String,
+		CreatedBy:   row.CreatedBy,
+		Status:      shorturl.Status(row.Status),
+		ExpiresAt:   expiresAt,
+		Source:      shorturl.Source(row.Source),
+	}, nil
 }
 
 func isUniqueViolation(err error) bool {

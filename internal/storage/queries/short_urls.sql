@@ -10,3 +10,8 @@ WHERE domain_id = $1
 INSERT INTO short_urls (domain_id, short_code, long_url, title, description, created_by, status, expires_at, source)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 RETURNING id;
+
+-- name: FindShortURLByID :one
+SELECT id, domain_id, short_code, long_url, title, description, created_by, status, expires_at, source, created_at, updated_at
+FROM short_urls
+WHERE id = $1;
