@@ -32,7 +32,8 @@ type server struct {
 	sessions     auth.SessionStore
 	authStore    auth.Store // also used for audit_log writes (stats.admin_view, 4.1節)
 	localAuth    *auth.LocalAuthenticator
-	resolver     *auth.Resolver
+	resolver     *auth.Resolver // account-link confirmation (3.4節), used directly by handleConfirmLink
+	localSignup  *auth.LocalSignup
 	authSettings authSettingsChecker
 	permissions  permissionChecker
 	shortURLs    *shorturl.Creator
@@ -59,6 +60,7 @@ func (s *server) routes() http.Handler {
 	r.Route("/api", func(r chi.Router) {
 		r.Post("/auth/local/login", s.handleLocalLogin)
 		r.Post("/auth/local/signup", s.handleLocalSignup)
+		r.Get("/auth/local/verify-email", s.handleVerifyEmail)
 		r.Get("/auth/confirm-link", s.handleConfirmLink)
 		r.Post("/auth/logout", s.handleLogout)
 

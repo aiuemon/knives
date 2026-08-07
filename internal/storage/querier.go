@@ -14,13 +14,16 @@ type Querier interface {
 	ConfirmPendingLinkRequest(ctx context.Context, arg ConfirmPendingLinkRequestParams) error
 	CountAuthIdentitiesForUser(ctx context.Context, userID uuid.UUID) (int64, error)
 	CreateAuthIdentity(ctx context.Context, arg CreateAuthIdentityParams) (*CreateAuthIdentityRow, error)
+	CreateLocalSignupVerification(ctx context.Context, arg CreateLocalSignupVerificationParams) (uuid.UUID, error)
 	CreatePendingLinkRequest(ctx context.Context, arg CreatePendingLinkRequestParams) (uuid.UUID, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (*CreateUserRow, error)
+	DeleteLocalSignupVerification(ctx context.Context, id uuid.UUID) error
 	FindAuthIdentity(ctx context.Context, arg FindAuthIdentityParams) (*FindAuthIdentityRow, error)
 	FindAuthSettings(ctx context.Context) (*FindAuthSettingsRow, error)
 	FindDefaultDomain(ctx context.Context) (uuid.UUID, error)
 	FindIsSystemAdmin(ctx context.Context, id uuid.UUID) (bool, error)
 	FindLocalCredential(ctx context.Context, userID uuid.UUID) (*LocalCredential, error)
+	FindLocalSignupVerificationByTokenHash(ctx context.Context, tokenHash string) (*FindLocalSignupVerificationByTokenHashRow, error)
 	FindPendingLinkRequestByTokenHash(ctx context.Context, tokenHash string) (*FindPendingLinkRequestByTokenHashRow, error)
 	FindRedirectTarget(ctx context.Context, arg FindRedirectTargetParams) (*FindRedirectTargetRow, error)
 	FindShortCodeSettings(ctx context.Context) (*FindShortCodeSettingsRow, error)

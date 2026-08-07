@@ -260,12 +260,54 @@ type fakeMailer struct {
 	sentTo  string
 	sentURL string
 	calls   int
+
+	verifySentTo  string
+	verifySentURL string
+	verifyCalls   int
 }
 
 func (m *fakeMailer) SendAccountLinkConfirmation(_ context.Context, toEmail, confirmURL string) error {
 	m.sentTo = toEmail
 	m.sentURL = confirmURL
 	m.calls++
+	return nil
+}
+
+func (m *fakeMailer) SendSignupVerification(_ context.Context, toEmail, verifyURL string) error {
+	m.verifySentTo = toEmail
+	m.verifySentURL = verifyURL
+	m.verifyCalls++
+	return nil
+}
+
+type fakeSignupStore struct {
+	byHash map[string]*auth.SignupVerification
+}
+
+func newFakeSignupStore() *fakeSignupStore {
+	return &fakeSignupStore{byHash: map[string]*auth.SignupVerification{}}
+}
+
+func (s *fakeSignupStore) CreatePendingSignup(_ context.Context, email, passwordHash, tokenHash string, expiresAt time.Time) (uuid.UUID, error) {
+	id := uuid.New()
+	s.byHash[tokenHash] = &auth.SignupVerification{ID: id, Email: email, PasswordHash: passwordHash, ExpiresAt: expiresAt}
+	return id, nil
+}
+
+func (s *fakeSignupStore) FindPendingSignupByTokenHash(_ context.Context, tokenHash string) (*auth.SignupVerification, error) {
+	v, ok := s.byHash[tokenHash]
+	if !ok {
+		return nil, auth.ErrNotFound
+	}
+	return v, nil
+}
+
+func (s *fakeSignupStore) DeletePendingSignup(_ context.Context, id uuid.UUID) error {
+	for h, v := range s.byHash {
+		if v.ID == id {
+			delete(s.byHash, h)
+		}
+	}
 	return nil
 }
 
@@ -290,6 +332,7 @@ type testDeps struct {
 	permissions  *fakePermissions
 	mailer       *fakeMailer
 	authSettings *fakeAuthSettings
+	signupStore  *fakeSignupStore
 }
 
 func newTestServer() *testDeps {
@@ -305,15 +348,24 @@ func newTestServer() *testDeps {
 			selfSignupEnabled:   true,
 			requireConfirmation: false,
 		},
+		signupStore: newFakeSignupStore(),
+	}
+	resolver := &auth.Resolver{
+		Store:          d.authStore,
+		Mailer:         d.mailer,
+		ConfirmBaseURL: "http://localhost:8080/api/auth/confirm-link",
 	}
 	d.server = &server{
 		sessions:  d.sessions,
 		authStore: d.authStore,
 		localAuth: &auth.LocalAuthenticator{Users: d.authStore, Credentials: d.credentials},
-		resolver: &auth.Resolver{
-			Store:          d.authStore,
-			Mailer:         d.mailer,
-			ConfirmBaseURL: "http://localhost:8080/api/auth/confirm-link",
+		resolver:  resolver,
+		localSignup: &auth.LocalSignup{
+			Store:         d.signupStore,
+			Mailer:        d.mailer,
+			Resolver:      resolver,
+			Credentials:   d.credentials,
+			VerifyBaseURL: "http://localhost:8080/api/auth/local/verify-email",
 		},
 		authSettings:      d.authSettings,
 		permissions:       d.permissions,

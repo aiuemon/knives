@@ -315,6 +315,15 @@ type LocalCredential struct {
 	LockedUntil    pgtype.Timestamptz `json:"locked_until"`
 }
 
+type LocalSignupVerification struct {
+	ID           uuid.UUID          `json:"id"`
+	Email        string             `json:"email"`
+	PasswordHash string             `json:"password_hash"`
+	TokenHash    string             `json:"token_hash"`
+	ExpiresAt    pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
 type PendingLinkRequest struct {
 	ID                        uuid.UUID          `json:"id"`
 	ExistingUserID            uuid.UUID          `json:"existing_user_id"`

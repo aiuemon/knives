@@ -68,10 +68,11 @@ type localSignupRequest struct {
 
 type localSignupResponse struct {
 	// Status is "logged_in" when signup completed immediately, or
-	// "confirmation_required" when this email already belongs to a
-	// claimed account and a confirmation email was sent to its owner
-	// instead (3.4節: なりすまし対策のため、リクエスト元ではなく既存アカ
-	// ウントの登録メール宛に送る)。
+	// "verification_pending" when a link was mailed out and nothing has
+	// been created yet — either because the submitted email itself still
+	// needs to be proven reachable (local-auth専用の登録前ゲート), or
+	// because it turned out to already belong to a claimed account and
+	// 3.4節's account-link confirmation took over instead.
 	Status string `json:"status"`
 }
 
@@ -99,38 +100,20 @@ func (s *server) handleLocalSignup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid email", http.StatusBadRequest)
 		return
 	}
-	email := addr.Address
 
-	// パスワードはResolveより先に検証する: 弱いパスワードで弾く前に
-	// ユーザ作成や確認メール送信が起きてしまうのを避けるため。
-	if err := auth.ValidatePasswordStrength(req.Password); err != nil {
+	result, err := s.localSignup.Start(ctx, addr.Address, req.Password, requireConfirmation)
+	if errors.Is(err, auth.ErrPasswordTooShort) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-
-	result, err := s.resolver.Resolve(ctx, auth.LoginAttempt{
-		ProviderType:  auth.ProviderLocal,
-		Subject:       email, // localはIdP側IDを持たないため、emailをsubjectとして扱う
-		Email:         email,
-		EmailVerified: !requireConfirmation,
-		Trusted:       false, // ローカルセルフサインアップは3.4節のIdP信頼バイパス対象外
-	})
 	if err != nil {
-		slog.Error("resolve local signup failed", "error", err)
+		slog.Error("local signup failed", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	if result.Outcome == auth.OutcomePendingConfirmation {
-		writeJSON(w, http.StatusAccepted, localSignupResponse{Status: "confirmation_required"})
-		return
-	}
-
-	// OutcomeLoggedIn: 新規ユーザ作成、またはYOURLS移行プレースホルダの
-	// 初回有効化のいずれか。まだパスワードが保存されていないので設定する。
-	if err := s.localAuth.SetPassword(ctx, result.User.ID, req.Password); err != nil {
-		slog.Error("set password after signup failed", "error", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	if result.Outcome == auth.SignupOutcomeVerificationPending {
+		writeJSON(w, http.StatusAccepted, localSignupResponse{Status: "verification_pending"})
 		return
 	}
 
@@ -141,6 +124,48 @@ func (s *server) handleLocalSignup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.setSessionCookie(w, token)
+	writeJSON(w, http.StatusCreated, localSignupResponse{Status: "logged_in"})
+}
+
+// handleVerifyEmail completes the local-signup email-ownership gate
+// (3.1節, local-auth専用): only after this succeeds does
+// users/auth_identities/local_credentials get created for the address.
+func (s *server) handleVerifyEmail(w http.ResponseWriter, r *http.Request) {
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		http.Error(w, "missing token", http.StatusBadRequest)
+		return
+	}
+
+	result, err := s.localSignup.VerifyEmail(r.Context(), token)
+	switch {
+	case errors.Is(err, auth.ErrTokenExpired):
+		http.Error(w, "verification link has expired", http.StatusGone)
+		return
+	case errors.Is(err, auth.ErrNotFound):
+		http.Error(w, "invalid verification link", http.StatusNotFound)
+		return
+	case err != nil:
+		slog.Error("verify email failed", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	if result.Outcome == auth.SignupOutcomeVerificationPending {
+		// メール到達確認は完了したが、統合先アカウントは3.4節の確認メール
+		// 待ち(まれなケース: 到達確認完了直後に別アカウントへのクレーム
+		// 済みが判明した場合)。まだログインさせない。
+		writeJSON(w, http.StatusAccepted, localSignupResponse{Status: "verification_pending"})
+		return
+	}
+
+	token2, err := s.sessions.Create(r.Context(), result.User.ID, s.sessionTTL)
+	if err != nil {
+		slog.Error("session create failed", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	s.setSessionCookie(w, token2)
 	writeJSON(w, http.StatusCreated, localSignupResponse{Status: "logged_in"})
 }
 
@@ -185,10 +210,9 @@ type setPasswordRequest struct {
 }
 
 // handleSetPassword lets an already-authenticated user set/replace their
-// local password — used both to finish local signup after email
-// confirmation (the confirm-link flow attaches the identity but doesn't
-// carry a password across the request boundary) and as an ordinary
-// password change.
+// local password — e.g. adding local login to an SSO-only account, or an
+// ordinary password change. (Local self-signup itself carries its password
+// through automatically via LocalSignup; it doesn't need this endpoint.)
 func (s *server) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 	subject, ok := subjectFromContext(r.Context())
 	if !ok {

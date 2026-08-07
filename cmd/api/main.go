@@ -73,6 +73,7 @@ func main() {
 	permissionStore := storage.NewPermissionStore(pool)
 	shortURLStore := storage.NewShortURLStore(pool)
 	authSettingsStore := storage.NewAuthSettingsStore(pool)
+	signupVerificationStore := storage.NewLocalSignupVerificationStore(pool)
 
 	domainStore := storage.NewRedirectStore(pool) // FindDefaultDomain is shared with cmd/redirect
 	domainID, err := domainStore.FindDefaultDomain(ctx)
@@ -81,16 +82,25 @@ func main() {
 		os.Exit(1)
 	}
 
-	confirmBaseURL := getenv("API_PUBLIC_BASE_URL", "http://localhost:8080") + "/api/auth/confirm-link"
+	publicBaseURL := getenv("API_PUBLIC_BASE_URL", "http://localhost:8080")
+
+	resolver := &auth.Resolver{
+		Store:          authStore,
+		Mailer:         mailer,
+		ConfirmBaseURL: publicBaseURL + "/api/auth/confirm-link",
+	}
 
 	srv := &server{
 		sessions:  auth.NewRedisSessionStore(redisClient),
 		authStore: authStore,
 		localAuth: &auth.LocalAuthenticator{Users: authStore, Credentials: credentialStore},
-		resolver: &auth.Resolver{
-			Store:          authStore,
-			Mailer:         mailer,
-			ConfirmBaseURL: confirmBaseURL,
+		resolver:  resolver,
+		localSignup: &auth.LocalSignup{
+			Store:         signupVerificationStore,
+			Mailer:        mailer,
+			Resolver:      resolver,
+			Credentials:   credentialStore,
+			VerifyBaseURL: publicBaseURL + "/api/auth/local/verify-email",
 		},
 		authSettings: authSettingsStore,
 		permissions:  permissionStore,
@@ -128,14 +138,22 @@ func main() {
 	}
 }
 
+// mailer is the union of the two mail-sending roles auth needs: account-link
+// confirmation (3.4節) and local-signup email verification (3.1節).
+// SMTPMailer implements both; so does the logMailer fallback below.
+type mailer interface {
+	auth.ConfirmationMailer
+	auth.SignupVerificationMailer
+}
+
 // buildMailer returns a real SMTPMailer when SMTP_HOST is configured, or a
 // logMailer fallback for local development so the signup/confirm-link flow
 // is exercisable without a real mail server. Production deployments must
 // set SMTP_HOST.
-func buildMailer() (auth.ConfirmationMailer, error) {
+func buildMailer() (mailer, error) {
 	smtpHost := os.Getenv("SMTP_HOST")
 	if smtpHost == "" {
-		slog.Warn("SMTP_HOST not set; confirmation emails will only be logged, not sent")
+		slog.Warn("SMTP_HOST not set; confirmation/verification emails will only be logged, not sent")
 		return logMailer{}, nil
 	}
 
@@ -156,6 +174,11 @@ type logMailer struct{}
 
 func (logMailer) SendAccountLinkConfirmation(_ context.Context, toEmail, confirmURL string) error {
 	slog.Warn("confirmation email not sent (no SMTP configured)", "to", toEmail, "confirm_url", confirmURL)
+	return nil
+}
+
+func (logMailer) SendSignupVerification(_ context.Context, toEmail, verifyURL string) error {
+	slog.Warn("verification email not sent (no SMTP configured)", "to", toEmail, "verify_url", verifyURL)
 	return nil
 }
 

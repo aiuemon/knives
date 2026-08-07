@@ -117,8 +117,8 @@ func TestHandleLocalSignup_CollidingEmailSendsConfirmationInsteadOfLoggingIn(t *
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.Status != "confirmation_required" {
-		t.Fatalf("expected status 'confirmation_required', got %q", resp.Status)
+	if resp.Status != "verification_pending" {
+		t.Fatalf("expected status 'verification_pending', got %q", resp.Status)
 	}
 	if len(rec.Result().Cookies()) != 0 {
 		t.Fatalf("a pending signup must not issue a session cookie")
@@ -218,5 +218,119 @@ func TestHandleSetPassword_Success(t *testing.T) {
 	}
 	if _, err := d.server.localAuth.Login(ctx, "person@example.com", "another-strong-password"); err != nil {
 		t.Fatalf("expected the newly set password to work for login: %v", err)
+	}
+}
+
+func TestHandleLocalSignup_ConfirmationRequired_NoAccountUntilVerified(t *testing.T) {
+	d := newTestServer()
+	d.authSettings.requireConfirmation = true
+
+	body, _ := json.Marshal(localSignupRequest{Email: "new@example.com", Password: "correct horse battery staple"})
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/local/signup", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp localSignupResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Status != "verification_pending" {
+		t.Fatalf("expected status 'verification_pending', got %q", resp.Status)
+	}
+	if len(rec.Result().Cookies()) != 0 {
+		t.Fatalf("an unverified signup must not issue a session cookie")
+	}
+	if d.mailer.verifyCalls != 1 || d.mailer.verifySentTo != "new@example.com" {
+		t.Fatalf("expected one signup-verification email, got %+v", d.mailer)
+	}
+	if _, err := d.authStore.FindUserByEmail(context.Background(), "new@example.com"); err == nil {
+		t.Fatalf("no user must exist before the email is verified (local-auth専用の登録前ゲート)")
+	}
+}
+
+func TestHandleVerifyEmail_CompletesSignupAndLogsIn(t *testing.T) {
+	d := newTestServer()
+	d.authSettings.requireConfirmation = true
+
+	signupBody, _ := json.Marshal(localSignupRequest{Email: "new@example.com", Password: "correct horse battery staple"})
+	signupRec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(signupRec, httptest.NewRequest(http.MethodPost, "/api/auth/local/signup", bytes.NewReader(signupBody)))
+	if signupRec.Code != http.StatusAccepted {
+		t.Fatalf("seed signup: expected 202, got %d", signupRec.Code)
+	}
+	token := extractToken(t, d.mailer.verifySentURL)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/local/verify-email?token="+token, nil)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Value == "" {
+		t.Fatalf("expected a session cookie to be issued, got %+v", cookies)
+	}
+	user, err := d.authStore.FindUserByEmail(context.Background(), "new@example.com")
+	if err != nil {
+		t.Fatalf("expected the user to exist after verification: %v", err)
+	}
+	session, err := d.sessions.Find(context.Background(), cookies[0].Value)
+	if err != nil || session.UserID != user.ID {
+		t.Fatalf("expected the issued session to belong to the newly verified user, err=%v session=%+v", err, session)
+	}
+}
+
+func TestHandleVerifyEmail_MissingTokenReturns400(t *testing.T) {
+	d := newTestServer()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/local/verify-email", nil)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestHandleVerifyEmail_UnknownTokenReturns404(t *testing.T) {
+	d := newTestServer()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/local/verify-email?token=does-not-exist", nil)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestHandleVerifyEmail_ExpiredTokenReturns410(t *testing.T) {
+	d := newTestServer()
+	d.authSettings.requireConfirmation = true
+
+	current := time.Date(2026, 8, 7, 0, 0, 0, 0, time.UTC)
+	d.server.localSignup.Now = func() time.Time { return current }
+	d.server.localSignup.TokenTTL = time.Minute
+
+	signupBody, _ := json.Marshal(localSignupRequest{Email: "new@example.com", Password: "correct horse battery staple"})
+	signupRec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(signupRec, httptest.NewRequest(http.MethodPost, "/api/auth/local/signup", bytes.NewReader(signupBody)))
+	if signupRec.Code != http.StatusAccepted {
+		t.Fatalf("seed signup: expected 202, got %d", signupRec.Code)
+	}
+	token := extractToken(t, d.mailer.verifySentURL)
+
+	current = current.Add(2 * time.Minute)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/local/verify-email?token="+token, nil)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusGone {
+		t.Fatalf("expected 410, got %d: %s", rec.Code, rec.Body.String())
 	}
 }

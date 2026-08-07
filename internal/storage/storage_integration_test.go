@@ -289,6 +289,32 @@ func TestLocalCredentialStore_SetPasswordAndFailureTracking(t *testing.T) {
 	}
 }
 
+func TestLocalSignupVerificationStore_CreateFindDelete(t *testing.T) {
+	pool := setupPostgres(t)
+	store := storage.NewLocalSignupVerificationStore(pool)
+	ctx := context.Background()
+
+	id, err := store.CreatePendingSignup(ctx, "new@example.com", "argon2id-hash-placeholder", "tokenhash-1", time.Now().Add(30*time.Minute))
+	if err != nil {
+		t.Fatalf("CreatePendingSignup: %v", err)
+	}
+
+	found, err := store.FindPendingSignupByTokenHash(ctx, "tokenhash-1")
+	if err != nil {
+		t.Fatalf("FindPendingSignupByTokenHash: %v", err)
+	}
+	if found.ID != id || found.Email != "new@example.com" || found.PasswordHash != "argon2id-hash-placeholder" {
+		t.Fatalf("unexpected pending signup: %+v", found)
+	}
+
+	if err := store.DeletePendingSignup(ctx, id); err != nil {
+		t.Fatalf("DeletePendingSignup: %v", err)
+	}
+	if _, err := store.FindPendingSignupByTokenHash(ctx, "tokenhash-1"); !errors.Is(err, auth.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound after delete, got %v", err)
+	}
+}
+
 func insertDefaultDomain(t *testing.T, pool *pgxpool.Pool, hostname string) uuid.UUID {
 	t.Helper()
 	var domainID uuid.UUID

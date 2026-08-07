@@ -25,7 +25,10 @@ type SMTPMailer struct {
 	from   string
 }
 
-var _ ConfirmationMailer = (*SMTPMailer)(nil)
+var (
+	_ ConfirmationMailer       = (*SMTPMailer)(nil)
+	_ SignupVerificationMailer = (*SMTPMailer)(nil)
+)
 
 func NewSMTPMailer(cfg SMTPMailerConfig) (*SMTPMailer, error) {
 	opts := []gomail.Option{
@@ -61,6 +64,25 @@ func (m *SMTPMailer) SendAccountLinkConfirmation(ctx context.Context, toEmail, c
 			"%s\n\n"+
 			"心当たりがない場合は、このメールを無視してください。アカウントに変更は加えられません。",
 		int(DefaultPendingLinkTTL.Minutes()), confirmURL,
+	))
+	return m.client.DialAndSendWithContext(ctx, msg)
+}
+
+func (m *SMTPMailer) SendSignupVerification(ctx context.Context, toEmail, verifyURL string) error {
+	msg := gomail.NewMsg()
+	if err := msg.From(m.from); err != nil {
+		return err
+	}
+	if err := msg.To(toEmail); err != nil {
+		return err
+	}
+	msg.Subject("【knives】メールアドレスの確認")
+	msg.SetBodyString(gomail.TypeTextPlain, fmt.Sprintf(
+		"このメールアドレスでアカウント登録のリクエストがありました。\n"+
+			"%d分以内に以下のリンクを開いて登録を完了してください。\n\n"+
+			"%s\n\n"+
+			"心当たりがない場合は、このメールを無視してください。登録は完了しません。",
+		int(DefaultPendingLinkTTL.Minutes()), verifyURL,
 	))
 	return m.client.DialAndSendWithContext(ctx, msg)
 }
