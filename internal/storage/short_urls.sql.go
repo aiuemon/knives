@@ -9,6 +9,7 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const findRedirectTarget = `-- name: FindRedirectTarget :one
@@ -35,4 +36,39 @@ func (q *Queries) FindRedirectTarget(ctx context.Context, arg FindRedirectTarget
 	var i FindRedirectTargetRow
 	err := row.Scan(&i.ID, &i.LongUrl)
 	return &i, err
+}
+
+const insertShortURL = `-- name: InsertShortURL :one
+INSERT INTO short_urls (domain_id, short_code, long_url, title, description, created_by, status, expires_at, source)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+RETURNING id
+`
+
+type InsertShortURLParams struct {
+	DomainID    uuid.UUID          `json:"domain_id"`
+	ShortCode   string             `json:"short_code"`
+	LongUrl     string             `json:"long_url"`
+	Title       pgtype.Text        `json:"title"`
+	Description pgtype.Text        `json:"description"`
+	CreatedBy   uuid.UUID          `json:"created_by"`
+	Status      ShortUrlStatus     `json:"status"`
+	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+	Source      ShortUrlSource     `json:"source"`
+}
+
+func (q *Queries) InsertShortURL(ctx context.Context, arg InsertShortURLParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, insertShortURL,
+		arg.DomainID,
+		arg.ShortCode,
+		arg.LongUrl,
+		arg.Title,
+		arg.Description,
+		arg.CreatedBy,
+		arg.Status,
+		arg.ExpiresAt,
+		arg.Source,
+	)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
 }

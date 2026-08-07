@@ -28,3 +28,25 @@ func (q *Queries) FindURLPermission(ctx context.Context, arg FindURLPermissionPa
 	err := row.Scan(&role)
 	return role, err
 }
+
+const insertURLPermission = `-- name: InsertURLPermission :exec
+INSERT INTO url_permissions (short_url_id, user_id, role, granted_by)
+VALUES ($1, $2, $3, $4)
+`
+
+type InsertURLPermissionParams struct {
+	ShortUrlID uuid.UUID         `json:"short_url_id"`
+	UserID     uuid.UUID         `json:"user_id"`
+	Role       UrlPermissionRole `json:"role"`
+	GrantedBy  uuid.UUID         `json:"granted_by"`
+}
+
+func (q *Queries) InsertURLPermission(ctx context.Context, arg InsertURLPermissionParams) error {
+	_, err := q.db.Exec(ctx, insertURLPermission,
+		arg.ShortUrlID,
+		arg.UserID,
+		arg.Role,
+		arg.GrantedBy,
+	)
+	return err
+}

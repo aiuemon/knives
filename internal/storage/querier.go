@@ -20,9 +20,12 @@ type Querier interface {
 	FindDefaultDomain(ctx context.Context) (uuid.UUID, error)
 	FindPendingLinkRequestByTokenHash(ctx context.Context, tokenHash string) (*FindPendingLinkRequestByTokenHashRow, error)
 	FindRedirectTarget(ctx context.Context, arg FindRedirectTargetParams) (*FindRedirectTargetRow, error)
+	FindShortCodeSettings(ctx context.Context) (*FindShortCodeSettingsRow, error)
 	FindURLPermission(ctx context.Context, arg FindURLPermissionParams) (UrlPermissionRole, error)
 	FindUserByEmail(ctx context.Context, email string) (*FindUserByEmailRow, error)
 	FindUserByID(ctx context.Context, id uuid.UUID) (*FindUserByIDRow, error)
+	InsertShortURL(ctx context.Context, arg InsertShortURLParams) (uuid.UUID, error)
+	InsertURLPermission(ctx context.Context, arg InsertURLPermissionParams) error
 	RecordAuditLog(ctx context.Context, arg RecordAuditLogParams) error
 	TouchAuthIdentity(ctx context.Context, arg TouchAuthIdentityParams) error
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/aiuemon/knives/internal/auth"
 	"github.com/aiuemon/knives/internal/permission"
+	"github.com/aiuemon/knives/internal/shorturl"
 	"github.com/aiuemon/knives/internal/storage"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -145,32 +146,100 @@ func TestPermissionStore_FindGrant(t *testing.T) {
 		t.Fatalf("CreateUser: %v", err)
 	}
 
-	// internal/shorturl doesn't exist yet, so seed short_urls directly.
-	var domainID, shortURLID uuid.UUID
-	if err := pool.QueryRow(ctx, `INSERT INTO domains (hostname, is_default) VALUES ($1, true) RETURNING id`, "go.example.com").Scan(&domainID); err != nil {
-		t.Fatalf("insert domain: %v", err)
-	}
-	if err := pool.QueryRow(ctx, `INSERT INTO short_urls (domain_id, short_code, long_url, created_by) VALUES ($1, $2, $3, $4) RETURNING id`,
-		domainID, "abc1234", "https://example.com", owner.ID).Scan(&shortURLID); err != nil {
-		t.Fatalf("insert short_url: %v", err)
-	}
-	if _, err := pool.Exec(ctx, `INSERT INTO url_permissions (short_url_id, user_id, role, granted_by) VALUES ($1, $2, 'owner', $2)`, shortURLID, owner.ID); err != nil {
-		t.Fatalf("insert url_permission: %v", err)
+	domainID := insertDefaultDomain(t, pool, "go.example.com")
+	creator := shorturl.Creator{Store: storage.NewShortURLStore(pool)}
+	su, err := creator.Create(ctx, shorturl.CreateInput{
+		DomainID:  domainID,
+		LongURL:   "https://example.com",
+		CreatedBy: owner.ID,
+	})
+	if err != nil {
+		t.Fatalf("shorturl Create: %v", err)
 	}
 
-	grant, err := permStore.FindGrant(ctx, shortURLID, owner.ID)
+	grant, err := permStore.FindGrant(ctx, su.ID, owner.ID)
 	if err != nil {
 		t.Fatalf("FindGrant: %v", err)
 	}
 	if grant == nil || grant.Role != permission.RoleOwner {
-		t.Fatalf("expected owner grant, got %+v", grant)
+		t.Fatalf("expected the creator to hold an owner grant, got %+v", grant)
 	}
 
-	noGrant, err := permStore.FindGrant(ctx, shortURLID, bystander.ID)
+	noGrant, err := permStore.FindGrant(ctx, su.ID, bystander.ID)
 	if err != nil {
 		t.Fatalf("FindGrant for a non-permitted user must not error: %v", err)
 	}
 	if noGrant != nil {
 		t.Fatalf("expected nil grant for a user with no permission, got %+v", noGrant)
 	}
+}
+
+func TestShortURLStore_CreateShortURL(t *testing.T) {
+	pool := setupPostgres(t)
+	authStore := storage.NewAuthStore(pool)
+	permStore := storage.NewPermissionStore(pool)
+	ctx := context.Background()
+
+	domainID := insertDefaultDomain(t, pool, "go.example.com")
+	owner, err := authStore.CreateUser(ctx, "creator@example.com", true)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	creator := shorturl.Creator{Store: storage.NewShortURLStore(pool)}
+
+	su, err := creator.Create(ctx, shorturl.CreateInput{
+		DomainID:    domainID,
+		CustomAlias: "campaign-2026",
+		LongURL:     "https://example.com/landing",
+		CreatedBy:   owner.ID,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if su.ShortCode != "campaign-2026" {
+		t.Fatalf("expected the custom alias to be used, got %q", su.ShortCode)
+	}
+
+	grant, err := permStore.FindGrant(ctx, su.ID, owner.ID)
+	if err != nil || grant == nil || grant.Role != permission.RoleOwner {
+		t.Fatalf("expected the creator to be granted owner in the same transaction, got grant=%+v err=%v", grant, err)
+	}
+
+	// 同じdomain_id+short_codeでの再作成はDBのUNIQUE制約に当たり、
+	// shorturl.ErrAliasTakenとして表面化するはず(実DBでのcollision検知を検証)。
+	_, err = creator.Create(ctx, shorturl.CreateInput{
+		DomainID:    domainID,
+		CustomAlias: "campaign-2026",
+		LongURL:     "https://example.com/another",
+		CreatedBy:   owner.ID,
+	})
+	if !errors.Is(err, shorturl.ErrAliasTaken) {
+		t.Fatalf("expected ErrAliasTaken for a duplicate alias, got %v", err)
+	}
+
+	// short_code_settingsの初期値(migrationのデフォルト行)を使ったランダム
+	// 生成の経路も、実DB相手にend-to-endで確認する。
+	random, err := creator.Create(ctx, shorturl.CreateInput{
+		DomainID:  domainID,
+		LongURL:   "https://example.com/random",
+		CreatedBy: owner.ID,
+	})
+	if err != nil {
+		t.Fatalf("Create with random code: %v", err)
+	}
+	if len(random.ShortCode) == 0 {
+		t.Fatalf("expected a non-empty randomly generated short_code")
+	}
+}
+
+func insertDefaultDomain(t *testing.T, pool *pgxpool.Pool, hostname string) uuid.UUID {
+	t.Helper()
+	var domainID uuid.UUID
+	if err := pool.QueryRow(context.Background(),
+		`INSERT INTO domains (hostname, is_default) VALUES ($1, true) RETURNING id`, hostname,
+	).Scan(&domainID); err != nil {
+		t.Fatalf("insert domain: %v", err)
+	}
+	return domainID
 }
