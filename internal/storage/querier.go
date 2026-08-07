@@ -18,6 +18,7 @@ type Querier interface {
 	CreateUser(ctx context.Context, arg CreateUserParams) (*CreateUserRow, error)
 	FindAuthIdentity(ctx context.Context, arg FindAuthIdentityParams) (*FindAuthIdentityRow, error)
 	FindDefaultDomain(ctx context.Context) (uuid.UUID, error)
+	FindLocalCredential(ctx context.Context, userID uuid.UUID) (*LocalCredential, error)
 	FindPendingLinkRequestByTokenHash(ctx context.Context, tokenHash string) (*FindPendingLinkRequestByTokenHashRow, error)
 	FindRedirectTarget(ctx context.Context, arg FindRedirectTargetParams) (*FindRedirectTargetRow, error)
 	FindShortCodeSettings(ctx context.Context) (*FindShortCodeSettingsRow, error)
@@ -27,7 +28,10 @@ type Querier interface {
 	InsertShortURL(ctx context.Context, arg InsertShortURLParams) (uuid.UUID, error)
 	InsertURLPermission(ctx context.Context, arg InsertURLPermissionParams) error
 	RecordAuditLog(ctx context.Context, arg RecordAuditLogParams) error
+	RecordFailedLoginAttempt(ctx context.Context, arg RecordFailedLoginAttemptParams) error
+	ResetFailedLoginAttempts(ctx context.Context, userID uuid.UUID) error
 	TouchAuthIdentity(ctx context.Context, arg TouchAuthIdentityParams) error
+	UpsertLocalCredentialPassword(ctx context.Context, arg UpsertLocalCredentialPasswordParams) error
 }
 
 var _ Querier = (*Queries)(nil)

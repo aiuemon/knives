@@ -233,6 +233,62 @@ func TestShortURLStore_CreateShortURL(t *testing.T) {
 	}
 }
 
+func TestLocalCredentialStore_SetPasswordAndFailureTracking(t *testing.T) {
+	pool := setupPostgres(t)
+	authStore := storage.NewAuthStore(pool)
+	credStore := storage.NewLocalCredentialStore(pool)
+	ctx := context.Background()
+
+	user, err := authStore.CreateUser(ctx, "person@example.com", true)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	if _, err := credStore.FindLocalCredential(ctx, user.ID); !errors.Is(err, auth.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound before any password is set, got %v", err)
+	}
+
+	if err := credStore.SetPassword(ctx, user.ID, "argon2id-hash-placeholder"); err != nil {
+		t.Fatalf("SetPassword: %v", err)
+	}
+	cred, err := credStore.FindLocalCredential(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("FindLocalCredential: %v", err)
+	}
+	if cred.PasswordHash != "argon2id-hash-placeholder" {
+		t.Fatalf("unexpected password hash: %q", cred.PasswordHash)
+	}
+
+	lockUntil := time.Now().Add(15 * time.Minute).UTC()
+	if err := credStore.RecordFailedAttempt(ctx, user.ID, 5, &lockUntil); err != nil {
+		t.Fatalf("RecordFailedAttempt: %v", err)
+	}
+	locked, err := credStore.FindLocalCredential(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("FindLocalCredential after failure: %v", err)
+	}
+	if locked.FailedAttempts != 5 || locked.LockedUntil == nil {
+		t.Fatalf("expected failed_attempts=5 and a lockedUntil, got %+v", locked)
+	}
+
+	// SetPasswordのUPSERTはロック状態もクリアする(パスワードリセット時の
+	// 想定挙動)。
+	if err := credStore.SetPassword(ctx, user.ID, "new-hash"); err != nil {
+		t.Fatalf("SetPassword (reset): %v", err)
+	}
+	reset, err := credStore.FindLocalCredential(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("FindLocalCredential after reset: %v", err)
+	}
+	if reset.FailedAttempts != 0 || reset.LockedUntil != nil {
+		t.Fatalf("expected lockout state cleared after SetPassword, got %+v", reset)
+	}
+
+	if err := credStore.ResetFailedAttempts(ctx, user.ID); err != nil {
+		t.Fatalf("ResetFailedAttempts: %v", err)
+	}
+}
+
 func insertDefaultDomain(t *testing.T, pool *pgxpool.Pool, hostname string) uuid.UUID {
 	t.Helper()
 	var domainID uuid.UUID
