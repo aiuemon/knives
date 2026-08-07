@@ -22,13 +22,21 @@ type permissionChecker interface {
 	IsSystemAdmin(ctx context.Context, userID uuid.UUID) (bool, error)
 }
 
+// authSettingsChecker is the subset of storage.AuthSettingsStore the signup
+// handler needs.
+type authSettingsChecker interface {
+	FindAuthSettings(ctx context.Context) (localAuthEnabled, selfSignupEnabled, requireEmailConfirmation bool, err error)
+}
+
 type server struct {
-	sessions    auth.SessionStore
-	authStore   auth.Store // also used for audit_log writes (stats.admin_view, 4.1節)
-	localAuth   *auth.LocalAuthenticator
-	permissions permissionChecker
-	shortURLs   *shorturl.Creator
-	shortURLGet shorturl.Store
+	sessions     auth.SessionStore
+	authStore    auth.Store // also used for audit_log writes (stats.admin_view, 4.1節)
+	localAuth    *auth.LocalAuthenticator
+	resolver     *auth.Resolver
+	authSettings authSettingsChecker
+	permissions  permissionChecker
+	shortURLs    *shorturl.Creator
+	shortURLGet  shorturl.Store
 
 	domainID uuid.UUID
 
@@ -50,16 +58,18 @@ func (s *server) routes() http.Handler {
 
 	r.Route("/api", func(r chi.Router) {
 		r.Post("/auth/local/login", s.handleLocalLogin)
+		r.Post("/auth/local/signup", s.handleLocalSignup)
+		r.Get("/auth/confirm-link", s.handleConfirmLink)
 		r.Post("/auth/logout", s.handleLogout)
 
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireAuth)
+			r.Post("/auth/local/password", s.handleSetPassword)
 			r.Post("/short-urls", s.handleCreateShortURL)
 			r.Get("/short-urls/{id}", s.handleGetShortURL)
 		})
 	})
 
-	// TODO: SAML/OIDC/WebAuthn, ローカルセルフサインアップ(要 3.4節の確認
-	// メールフロー・Mailer実装)、短縮URLの一覧/更新/削除、権限管理、統計API。
+	// TODO: SAML/OIDC/WebAuthn, 短縮URLの一覧/更新/削除、権限管理、統計API。
 	return r
 }

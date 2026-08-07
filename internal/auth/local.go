@@ -142,12 +142,23 @@ func (a *LocalAuthenticator) Login(ctx context.Context, email, password string) 
 	return user, nil
 }
 
+// ValidatePasswordStrength is exported so callers (e.g. cmd/api's signup
+// handler) can reject a weak password before doing anything else — in
+// particular, before Resolver.Resolve has already created a user or sent a
+// confirmation email that a subsequent SetPassword failure can't undo.
+func ValidatePasswordStrength(password string) error {
+	if len(password) < minPasswordLength {
+		return ErrPasswordTooShort
+	}
+	return nil
+}
+
 // SetPassword hashes and stores a new password for userID. Used for local
 // self-signup (after Resolver.Resolve links the identity) and for password
 // resets.
 func (a *LocalAuthenticator) SetPassword(ctx context.Context, userID uuid.UUID, newPassword string) error {
-	if len(newPassword) < minPasswordLength {
-		return ErrPasswordTooShort
+	if err := ValidatePasswordStrength(newPassword); err != nil {
+		return err
 	}
 	hash, err := argon2id.CreateHash(newPassword, argon2id.DefaultParams)
 	if err != nil {

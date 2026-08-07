@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -62,17 +61,40 @@ func (f *fakeSessions) DeleteAllForUser(_ context.Context, userID uuid.UUID) err
 	return nil
 }
 
+// fakeAuthStore is a full in-memory auth.Store, needed because these tests
+// exercise auth.Resolver (self-signup, account-link confirmation) and not
+// just the individual lookups the earlier session/short-URL tests used.
 type fakeAuthStore struct {
 	users       map[uuid.UUID]*auth.User
 	usersByMail map[string]uuid.UUID
+	identities  map[string]*auth.AuthIdentity
+	identCount  map[uuid.UUID]int
+	pending     map[string]*auth.PendingLinkRequest
 	audit       []auth.AuditLogEntry
 }
 
 func newFakeAuthStore() *fakeAuthStore {
-	return &fakeAuthStore{users: map[uuid.UUID]*auth.User{}, usersByMail: map[string]uuid.UUID{}}
+	return &fakeAuthStore{
+		users:       map[uuid.UUID]*auth.User{},
+		usersByMail: map[string]uuid.UUID{},
+		identities:  map[string]*auth.AuthIdentity{},
+		identCount:  map[uuid.UUID]int{},
+		pending:     map[string]*auth.PendingLinkRequest{},
+	}
 }
 
-func (s *fakeAuthStore) FindAuthIdentity(context.Context, auth.ProviderType, *uuid.UUID, string) (*auth.AuthIdentity, error) {
+func authIdentKey(pt auth.ProviderType, pcID *uuid.UUID, subject string) string {
+	cfg := ""
+	if pcID != nil {
+		cfg = pcID.String()
+	}
+	return string(pt) + "|" + cfg + "|" + subject
+}
+
+func (s *fakeAuthStore) FindAuthIdentity(_ context.Context, providerType auth.ProviderType, providerConfigID *uuid.UUID, subject string) (*auth.AuthIdentity, error) {
+	if id, ok := s.identities[authIdentKey(providerType, providerConfigID, subject)]; ok {
+		return id, nil
+	}
 	return nil, auth.ErrNotFound
 }
 
@@ -92,8 +114,8 @@ func (s *fakeAuthStore) FindUserByID(_ context.Context, id uuid.UUID) (*auth.Use
 	return u, nil
 }
 
-func (s *fakeAuthStore) CountAuthIdentitiesForUser(context.Context, uuid.UUID) (int, error) {
-	return 0, nil
+func (s *fakeAuthStore) CountAuthIdentitiesForUser(_ context.Context, userID uuid.UUID) (int, error) {
+	return s.identCount[userID], nil
 }
 
 func (s *fakeAuthStore) CreateUser(_ context.Context, email string, emailVerified bool) (*auth.User, error) {
@@ -103,22 +125,44 @@ func (s *fakeAuthStore) CreateUser(_ context.Context, email string, emailVerifie
 	return u, nil
 }
 
-func (s *fakeAuthStore) CreateAuthIdentity(context.Context, uuid.UUID, auth.ProviderType, *uuid.UUID, string, string, bool) (*auth.AuthIdentity, error) {
-	return nil, errors.New("fakeAuthStore: CreateAuthIdentity not needed by cmd/api tests")
+func (s *fakeAuthStore) CreateAuthIdentity(_ context.Context, userID uuid.UUID, providerType auth.ProviderType, providerConfigID *uuid.UUID, subject, emailAtLink string, _ bool) (*auth.AuthIdentity, error) {
+	ident := &auth.AuthIdentity{ID: uuid.New(), UserID: userID, EmailAtLink: emailAtLink}
+	s.identities[authIdentKey(providerType, providerConfigID, subject)] = ident
+	s.identCount[userID]++
+	return ident, nil
 }
 
 func (s *fakeAuthStore) TouchAuthIdentity(context.Context, uuid.UUID, time.Time) error { return nil }
 
-func (s *fakeAuthStore) CreatePendingLinkRequest(context.Context, uuid.UUID, auth.ProviderType, *uuid.UUID, string, string, time.Time) (uuid.UUID, error) {
-	return uuid.Nil, errors.New("fakeAuthStore: CreatePendingLinkRequest not needed by cmd/api tests")
+func (s *fakeAuthStore) CreatePendingLinkRequest(_ context.Context, existingUserID uuid.UUID, providerType auth.ProviderType, providerConfigID *uuid.UUID, subject, tokenHash string, expiresAt time.Time) (uuid.UUID, error) {
+	id := uuid.New()
+	s.pending[tokenHash] = &auth.PendingLinkRequest{
+		ID:               id,
+		ExistingUserID:   existingUserID,
+		ProviderType:     providerType,
+		ProviderConfigID: providerConfigID,
+		Subject:          subject,
+		ExpiresAt:        expiresAt,
+	}
+	return id, nil
 }
 
-func (s *fakeAuthStore) FindPendingLinkRequestByTokenHash(context.Context, string) (*auth.PendingLinkRequest, error) {
+func (s *fakeAuthStore) FindPendingLinkRequestByTokenHash(_ context.Context, tokenHash string) (*auth.PendingLinkRequest, error) {
+	if p, ok := s.pending[tokenHash]; ok {
+		return p, nil
+	}
 	return nil, auth.ErrNotFound
 }
 
-func (s *fakeAuthStore) ConfirmPendingLinkRequest(context.Context, uuid.UUID, time.Time) error {
-	return nil
+func (s *fakeAuthStore) ConfirmPendingLinkRequest(_ context.Context, id uuid.UUID, at time.Time) error {
+	for _, p := range s.pending {
+		if p.ID == id {
+			t := at
+			p.ConfirmedAt = &t
+			return nil
+		}
+	}
+	return auth.ErrNotFound
 }
 
 func (s *fakeAuthStore) RecordAuditLog(_ context.Context, entry auth.AuditLogEntry) error {
@@ -212,15 +256,40 @@ func (p *fakePermissions) IsSystemAdmin(_ context.Context, userID uuid.UUID) (bo
 	return p.admins[userID], nil
 }
 
+type fakeMailer struct {
+	sentTo  string
+	sentURL string
+	calls   int
+}
+
+func (m *fakeMailer) SendAccountLinkConfirmation(_ context.Context, toEmail, confirmURL string) error {
+	m.sentTo = toEmail
+	m.sentURL = confirmURL
+	m.calls++
+	return nil
+}
+
+type fakeAuthSettings struct {
+	localAuthEnabled    bool
+	selfSignupEnabled   bool
+	requireConfirmation bool
+}
+
+func (f *fakeAuthSettings) FindAuthSettings(context.Context) (bool, bool, bool, error) {
+	return f.localAuthEnabled, f.selfSignupEnabled, f.requireConfirmation, nil
+}
+
 // --- test harness --------------------------------------------------------
 
 type testDeps struct {
-	server      *server
-	authStore   *fakeAuthStore
-	credentials *fakeCredentials
-	sessions    *fakeSessions
-	shortURLs   *fakeShortURLStore
-	permissions *fakePermissions
+	server       *server
+	authStore    *fakeAuthStore
+	credentials  *fakeCredentials
+	sessions     *fakeSessions
+	shortURLs    *fakeShortURLStore
+	permissions  *fakePermissions
+	mailer       *fakeMailer
+	authSettings *fakeAuthSettings
 }
 
 func newTestServer() *testDeps {
@@ -230,11 +299,23 @@ func newTestServer() *testDeps {
 		sessions:    newFakeSessions(),
 		shortURLs:   newFakeShortURLStore(),
 		permissions: newFakePermissions(),
+		mailer:      &fakeMailer{},
+		authSettings: &fakeAuthSettings{
+			localAuthEnabled:    true,
+			selfSignupEnabled:   true,
+			requireConfirmation: false,
+		},
 	}
 	d.server = &server{
-		sessions:          d.sessions,
-		authStore:         d.authStore,
-		localAuth:         &auth.LocalAuthenticator{Users: d.authStore, Credentials: d.credentials},
+		sessions:  d.sessions,
+		authStore: d.authStore,
+		localAuth: &auth.LocalAuthenticator{Users: d.authStore, Credentials: d.credentials},
+		resolver: &auth.Resolver{
+			Store:          d.authStore,
+			Mailer:         d.mailer,
+			ConfirmBaseURL: "http://localhost:8080/api/auth/confirm-link",
+		},
+		authSettings:      d.authSettings,
 		permissions:       d.permissions,
 		shortURLs:         &shorturl.Creator{Store: d.shortURLs},
 		shortURLGet:       d.shortURLs,

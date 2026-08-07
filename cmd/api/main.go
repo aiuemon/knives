@@ -49,6 +49,12 @@ func main() {
 		}
 	}
 
+	mailer, err := buildMailer()
+	if err != nil {
+		slog.Error("mailer init failed", "error", err)
+		os.Exit(1)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -66,6 +72,7 @@ func main() {
 	credentialStore := storage.NewLocalCredentialStore(pool)
 	permissionStore := storage.NewPermissionStore(pool)
 	shortURLStore := storage.NewShortURLStore(pool)
+	authSettingsStore := storage.NewAuthSettingsStore(pool)
 
 	domainStore := storage.NewRedirectStore(pool) // FindDefaultDomain is shared with cmd/redirect
 	domainID, err := domainStore.FindDefaultDomain(ctx)
@@ -74,13 +81,21 @@ func main() {
 		os.Exit(1)
 	}
 
+	confirmBaseURL := getenv("API_PUBLIC_BASE_URL", "http://localhost:8080") + "/api/auth/confirm-link"
+
 	srv := &server{
-		sessions:    auth.NewRedisSessionStore(redisClient),
-		authStore:   authStore,
-		localAuth:   &auth.LocalAuthenticator{Users: authStore, Credentials: credentialStore},
-		permissions: permissionStore,
-		shortURLs:   &shorturl.Creator{Store: shortURLStore},
-		shortURLGet: shortURLStore,
+		sessions:  auth.NewRedisSessionStore(redisClient),
+		authStore: authStore,
+		localAuth: &auth.LocalAuthenticator{Users: authStore, Credentials: credentialStore},
+		resolver: &auth.Resolver{
+			Store:          authStore,
+			Mailer:         mailer,
+			ConfirmBaseURL: confirmBaseURL,
+		},
+		authSettings: authSettingsStore,
+		permissions:  permissionStore,
+		shortURLs:    &shorturl.Creator{Store: shortURLStore},
+		shortURLGet:  shortURLStore,
 
 		domainID: domainID,
 
@@ -111,6 +126,37 @@ func main() {
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		slog.Error("api server shutdown failed", "error", err)
 	}
+}
+
+// buildMailer returns a real SMTPMailer when SMTP_HOST is configured, or a
+// logMailer fallback for local development so the signup/confirm-link flow
+// is exercisable without a real mail server. Production deployments must
+// set SMTP_HOST.
+func buildMailer() (auth.ConfirmationMailer, error) {
+	smtpHost := os.Getenv("SMTP_HOST")
+	if smtpHost == "" {
+		slog.Warn("SMTP_HOST not set; confirmation emails will only be logged, not sent")
+		return logMailer{}, nil
+	}
+
+	smtpPort, err := strconv.Atoi(getenv("SMTP_PORT", "587"))
+	if err != nil {
+		return nil, err
+	}
+	return auth.NewSMTPMailer(auth.SMTPMailerConfig{
+		Host:     smtpHost,
+		Port:     smtpPort,
+		Username: os.Getenv("SMTP_USERNAME"),
+		Password: os.Getenv("SMTP_PASSWORD"),
+		From:     getenv("MAIL_FROM", "noreply@example.com"),
+	})
+}
+
+type logMailer struct{}
+
+func (logMailer) SendAccountLinkConfirmation(_ context.Context, toEmail, confirmURL string) error {
+	slog.Warn("confirmation email not sent (no SMTP configured)", "to", toEmail, "confirm_url", confirmURL)
+	return nil
 }
 
 func getenv(key, fallback string) string {

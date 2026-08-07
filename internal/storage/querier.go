@@ -17,6 +17,7 @@ type Querier interface {
 	CreatePendingLinkRequest(ctx context.Context, arg CreatePendingLinkRequestParams) (uuid.UUID, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (*CreateUserRow, error)
 	FindAuthIdentity(ctx context.Context, arg FindAuthIdentityParams) (*FindAuthIdentityRow, error)
+	FindAuthSettings(ctx context.Context) (*FindAuthSettingsRow, error)
 	FindDefaultDomain(ctx context.Context) (uuid.UUID, error)
 	FindIsSystemAdmin(ctx context.Context, id uuid.UUID) (bool, error)
 	FindLocalCredential(ctx context.Context, userID uuid.UUID) (*LocalCredential, error)
