@@ -1,0 +1,24 @@
+# Go
+/bin/
+*.exe
+*.test
+*.out
+vendor/
+
+# Node / web
+web/node_modules/
+web/dist/
+web/.vite/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Local settings
+.claude/settings.local.json

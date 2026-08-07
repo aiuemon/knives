@@ -1,0 +1,23 @@
+DROP TABLE IF EXISTS audit_log;
+DROP TABLE IF EXISTS sessions;
+DROP TABLE IF EXISTS click_stats_daily;
+DROP TABLE IF EXISTS click_events_default;
+DROP TABLE IF EXISTS click_events;
+DROP TABLE IF EXISTS url_permissions;
+DROP TABLE IF EXISTS short_urls;
+DROP TABLE IF EXISTS domains;
+DROP TABLE IF EXISTS pending_link_requests;
+DROP TABLE IF EXISTS short_code_settings;
+DROP TABLE IF EXISTS auth_settings;
+DROP TABLE IF EXISTS webauthn_credentials;
+DROP TABLE IF EXISTS local_credentials;
+DROP TABLE IF EXISTS auth_identities;
+DROP TABLE IF EXISTS idp_oidc_configs;
+DROP TABLE IF EXISTS idp_saml_configs;
+DROP TABLE IF EXISTS users;
+
+DROP TYPE IF EXISTS url_permission_role;
+DROP TYPE IF EXISTS short_url_source;
+DROP TYPE IF EXISTS short_url_status;
+DROP TYPE IF EXISTS auth_provider_type;
+DROP TYPE IF EXISTS user_status;
