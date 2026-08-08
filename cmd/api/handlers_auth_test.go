@@ -449,3 +449,44 @@ func TestHandleApprovePendingLink_RejectsOtherUsersRequest(t *testing.T) {
 		t.Fatalf("expected 404 for a non-owning approver, got %d", approveRec.Code)
 	}
 }
+
+func TestHandleMe_RequiresAuth(t *testing.T) {
+	d := newTestServer()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+}
+
+func TestHandleMe_ReturnsCurrentUser(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	user, err := d.authStore.CreateUser(ctx, "person@example.com", true)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	token, err := d.sessions.Create(ctx, user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+
+	req := withSessionCookie(httptest.NewRequest(http.MethodGet, "/api/auth/me", nil), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp meResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.ID != user.ID || resp.Email != "person@example.com" {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+}

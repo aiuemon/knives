@@ -65,6 +65,29 @@ func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+type meResponse struct {
+	ID    uuid.UUID `json:"id"`
+	Email string    `json:"email"`
+}
+
+// handleMe lets the frontend check whether the session cookie it's holding
+// is still valid, and who it belongs to — needed to restore login state
+// across page reloads without re-submitting credentials.
+func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {
+	subject, ok := subjectFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	user, err := s.authStore.FindUserByID(r.Context(), subject.UserID)
+	if err != nil {
+		slog.Error("find user failed", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, meResponse{ID: user.ID, Email: user.Email})
+}
+
 type localSignupRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`

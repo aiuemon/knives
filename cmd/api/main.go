@@ -82,17 +82,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	publicBaseURL := getenv("API_PUBLIC_BASE_URL", "http://localhost:8080")
+	// web/ のSPA(ログイン→一覧表示→承認、メール確認画面等)の公開URL。
+	// メール内のリンクはここを指す。
+	webPublicBaseURL := getenv("WEB_PUBLIC_BASE_URL", "http://localhost:5173")
 
 	resolver := &auth.Resolver{
-		Store:          authStore,
-		Mailer:         mailer,
-		AuthSettings:   authSettingsStore,
-		ConfirmBaseURL: publicBaseURL + "/api/auth/confirm-link",
-		// web/ のSPAはまだ存在しないため、暫定的にAPIのJSONエンドポイントへ
-		// 直接誘導する。フロントエンド実装後は、ログイン→一覧表示→承認を
-		// 行う専用ページのURLに差し替えること。
-		PendingLinksURL: publicBaseURL + "/api/auth/pending-links",
+		Store:           authStore,
+		Mailer:          mailer,
+		AuthSettings:    authSettingsStore,
+		ConfirmBaseURL:  webPublicBaseURL + "/auth/confirm-link",
+		PendingLinksURL: webPublicBaseURL + "/pending-links",
 	}
 
 	srv := &server{
@@ -105,7 +104,7 @@ func main() {
 			Mailer:        mailer,
 			Resolver:      resolver,
 			Credentials:   credentialStore,
-			VerifyBaseURL: publicBaseURL + "/api/auth/local/verify-email",
+			VerifyBaseURL: webPublicBaseURL + "/auth/local/verify-email",
 		},
 		authSettings: authSettingsStore,
 		permissions:  permissionStore,

@@ -66,6 +66,7 @@ func (s *server) routes() http.Handler {
 
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireAuth)
+			r.Get("/auth/me", s.handleMe)
 			r.Post("/auth/local/password", s.handleSetPassword)
 			r.Get("/auth/pending-links", s.handleListPendingLinks)
 			r.Post("/auth/pending-links/{id}/approve", s.handleApprovePendingLink)
