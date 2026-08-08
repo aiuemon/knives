@@ -63,6 +63,8 @@ export function SignupPage() {
 						</span>
 						<input
 							type="email"
+							name="email"
+							autoComplete="email"
 							required
 							value={email}
 							onChange={(e) => setEmail(e.target.value)}
@@ -75,6 +77,8 @@ export function SignupPage() {
 						</span>
 						<input
 							type="password"
+							name="new-password"
+							autoComplete="new-password"
 							required
 							minLength={8}
 							value={password}
