@@ -12,14 +12,23 @@ import (
 type fakeSignupMailer struct {
 	confirmCalls                  int
 	verifyCalls                   int
+	reviewCalls                   int
 	lastConfirmTo, lastConfirmURL string
 	lastVerifyTo, lastVerifyURL   string
+	lastReviewTo, lastReviewURL   string
 }
 
 func (m *fakeSignupMailer) SendAccountLinkConfirmation(_ context.Context, toEmail, confirmURL string) error {
 	m.confirmCalls++
 	m.lastConfirmTo = toEmail
 	m.lastConfirmURL = confirmURL
+	return nil
+}
+
+func (m *fakeSignupMailer) SendAccountLinkReviewNotice(_ context.Context, toEmail, reviewURL string) error {
+	m.reviewCalls++
+	m.lastReviewTo = toEmail
+	m.lastReviewURL = reviewURL
 	return nil
 }
 
@@ -69,6 +78,7 @@ func newTestLocalSignup(users *fakeStore, creds *fakeCredentialStore, signupStor
 		Resolver: &Resolver{
 			Store:          users,
 			Mailer:         mailer,
+			AuthSettings:   &fakeAuthSettingsProvider{requireReauth: false},
 			Now:            func() time.Time { return fixedNow },
 			ConfirmBaseURL: "https://go.example.com/auth/confirm-link",
 		},
@@ -161,7 +171,7 @@ func TestLocalSignup_VerifyEmail_ExpiredTokenIsRejected(t *testing.T) {
 	ls := &LocalSignup{
 		Store:         signupStore,
 		Mailer:        mailer,
-		Resolver:      &Resolver{Store: users, Mailer: mailer, Now: func() time.Time { return current }},
+		Resolver:      &Resolver{Store: users, Mailer: mailer, AuthSettings: &fakeAuthSettingsProvider{requireReauth: false}, Now: func() time.Time { return current }},
 		Credentials:   creds,
 		Now:           func() time.Time { return current },
 		VerifyBaseURL: "https://go.example.com/auth/verify-email",

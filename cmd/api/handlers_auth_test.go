@@ -334,3 +334,118 @@ func TestHandleVerifyEmail_ExpiredTokenReturns410(t *testing.T) {
 		t.Fatalf("expected 410, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestHandleListPendingLinks_RequiresAuth(t *testing.T) {
+	d := newTestServer()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/pending-links", nil)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+}
+
+func TestReauthAccountLinkFlow_ListAndApprove(t *testing.T) {
+	d := newTestServer()
+	d.authSettings.requireReauthForAccountLink = true
+	ctx := context.Background()
+
+	// victimは信頼済みOIDCで既にアカウントをクレーム済み。
+	victim, err := d.authStore.CreateUser(ctx, "victim@example.com", true)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	cfgID := uuid.New()
+	if _, err := d.authStore.CreateAuthIdentity(ctx, victim.ID, auth.ProviderOIDC, &cfgID, "victim-sub", "victim@example.com", true); err != nil {
+		t.Fatalf("CreateAuthIdentity: %v", err)
+	}
+
+	// 攻撃者がvictimのメールでローカルサインアップを試みる
+	// (require_email_confirmation_for_signup=falseなので、直接衝突判定に入る)。
+	signupBody, _ := json.Marshal(localSignupRequest{Email: "victim@example.com", Password: "attacker-chosen-password"})
+	signupRec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(signupRec, httptest.NewRequest(http.MethodPost, "/api/auth/local/signup", bytes.NewReader(signupBody)))
+	if signupRec.Code != http.StatusAccepted {
+		t.Fatalf("seed signup: expected 202, got %d: %s", signupRec.Code, signupRec.Body.String())
+	}
+	if d.mailer.reviewCalls != 1 || d.mailer.reviewSentTo != "victim@example.com" {
+		t.Fatalf("expected a review-notice email to the real owner, got %+v", d.mailer)
+	}
+	if d.mailer.calls != 0 {
+		t.Fatalf("reauth mode must not send the one-click confirmation email")
+	}
+
+	// victimが自分の既存ログイン方法(ここではセッションを直接発行して模す)で
+	// ログインした上で、保留リクエストを一覧・承認する。
+	victimToken, err := d.sessions.Create(ctx, victim.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+
+	listReq := withSessionCookie(httptest.NewRequest(http.MethodGet, "/api/auth/pending-links", nil), victimToken)
+	listRec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", listRec.Code, listRec.Body.String())
+	}
+	var pending []pendingLinkResponse
+	if err := json.NewDecoder(listRec.Body).Decode(&pending); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("expected exactly one pending link for victim, got %+v", pending)
+	}
+
+	approveReq := withSessionCookie(httptest.NewRequest(http.MethodPost, "/api/auth/pending-links/"+pending[0].ID.String()+"/approve", nil), victimToken)
+	approveRec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(approveRec, approveReq)
+	if approveRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", approveRec.Code, approveRec.Body.String())
+	}
+
+	// 承認後は一覧から消える。
+	listAgainRec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(listAgainRec, withSessionCookie(httptest.NewRequest(http.MethodGet, "/api/auth/pending-links", nil), victimToken))
+	var pendingAfter []pendingLinkResponse
+	if err := json.NewDecoder(listAgainRec.Body).Decode(&pendingAfter); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(pendingAfter) != 0 {
+		t.Fatalf("expected the approved request to no longer be listed, got %+v", pendingAfter)
+	}
+}
+
+func TestHandleApprovePendingLink_RejectsOtherUsersRequest(t *testing.T) {
+	d := newTestServer()
+	d.authSettings.requireReauthForAccountLink = true
+	ctx := context.Background()
+
+	victim, _ := d.authStore.CreateUser(ctx, "victim@example.com", true)
+	cfgID := uuid.New()
+	if _, err := d.authStore.CreateAuthIdentity(ctx, victim.ID, auth.ProviderOIDC, &cfgID, "victim-sub", "victim@example.com", true); err != nil {
+		t.Fatalf("CreateAuthIdentity: %v", err)
+	}
+	bystander, _ := d.authStore.CreateUser(ctx, "bystander@example.com", true)
+
+	signupBody, _ := json.Marshal(localSignupRequest{Email: "victim@example.com", Password: "attacker-chosen-password"})
+	d.server.routes().ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/auth/local/signup", bytes.NewReader(signupBody)))
+
+	victimToken, _ := d.sessions.Create(ctx, victim.ID, time.Hour)
+	listRec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(listRec, withSessionCookie(httptest.NewRequest(http.MethodGet, "/api/auth/pending-links", nil), victimToken))
+	var pending []pendingLinkResponse
+	if err := json.NewDecoder(listRec.Body).Decode(&pending); err != nil || len(pending) != 1 {
+		t.Fatalf("expected exactly one pending link, err=%v pending=%+v", err, pending)
+	}
+
+	bystanderToken, _ := d.sessions.Create(ctx, bystander.ID, time.Hour)
+	approveReq := withSessionCookie(httptest.NewRequest(http.MethodPost, "/api/auth/pending-links/"+pending[0].ID.String()+"/approve", nil), bystanderToken)
+	approveRec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(approveRec, approveReq)
+
+	if approveRec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for a non-owning approver, got %d", approveRec.Code)
+	}
+}

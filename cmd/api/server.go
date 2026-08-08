@@ -25,7 +25,7 @@ type permissionChecker interface {
 // authSettingsChecker is the subset of storage.AuthSettingsStore the signup
 // handler needs.
 type authSettingsChecker interface {
-	FindAuthSettings(ctx context.Context) (localAuthEnabled, selfSignupEnabled, requireEmailConfirmation bool, err error)
+	FindAuthSettings(ctx context.Context) (localAuthEnabled, selfSignupEnabled, requireEmailConfirmation, requireReauthForAccountLink bool, err error)
 }
 
 type server struct {
@@ -67,6 +67,8 @@ func (s *server) routes() http.Handler {
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireAuth)
 			r.Post("/auth/local/password", s.handleSetPassword)
+			r.Get("/auth/pending-links", s.handleListPendingLinks)
+			r.Post("/auth/pending-links/{id}/approve", s.handleApprovePendingLink)
 			r.Post("/short-urls", s.handleCreateShortURL)
 			r.Get("/short-urls/{id}", s.handleGetShortURL)
 		})

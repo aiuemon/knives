@@ -7,6 +7,10 @@ import (
 	"net/http"
 	"net/mail"
 	"strings"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/aiuemon/knives/internal/auth"
 )
@@ -84,7 +88,7 @@ func (s *server) handleLocalSignup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	localEnabled, selfSignupEnabled, requireConfirmation, err := s.authSettings.FindAuthSettings(ctx)
+	localEnabled, selfSignupEnabled, requireConfirmation, _, err := s.authSettings.FindAuthSettings(ctx)
 	if err != nil {
 		slog.Error("auth settings lookup failed", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -203,6 +207,75 @@ func (s *server) handleConfirmLink(w http.ResponseWriter, r *http.Request) {
 	}
 	s.setSessionCookie(w, sessionToken)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "confirmed"})
+}
+
+type pendingLinkResponse struct {
+	ID           uuid.UUID `json:"id"`
+	ProviderType string    `json:"provider_type"`
+	ExpiresAt    time.Time `json:"expires_at"`
+}
+
+// handleListPendingLinks shows the authenticated user their own pending
+// account-link requests — the "review" step of the reauth-required flow
+// (auth_settings.require_reauth_for_account_link, 3.4節-4改訂): reaching
+// this endpoint at all already proves the caller logged in via their
+// existing method, which is the point.
+func (s *server) handleListPendingLinks(w http.ResponseWriter, r *http.Request) {
+	subject, ok := subjectFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	pending, err := s.resolver.ListPendingLinks(r.Context(), subject.UserID)
+	if err != nil {
+		slog.Error("list pending links failed", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	resp := make([]pendingLinkResponse, 0, len(pending))
+	for _, p := range pending {
+		resp = append(resp, pendingLinkResponse{ID: p.ID, ProviderType: string(p.ProviderType), ExpiresAt: p.ExpiresAt})
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleApprovePendingLink approves one of the caller's own pending
+// account-link requests. Resolver.ApprovePendingLink independently
+// re-checks ownership, so this handler doesn't need to (and must not skip
+// that check even though it looks redundant here).
+func (s *server) handleApprovePendingLink(w http.ResponseWriter, r *http.Request) {
+	subject, ok := subjectFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	requestID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	result, err := s.resolver.ApprovePendingLink(r.Context(), subject.UserID, requestID)
+	switch {
+	case errors.Is(err, auth.ErrNotFound):
+		http.NotFound(w, r)
+		return
+	case errors.Is(err, auth.ErrTokenExpired):
+		http.Error(w, "this request has expired", http.StatusGone)
+		return
+	case errors.Is(err, auth.ErrTokenAlreadyUsed):
+		http.Error(w, "this request was already approved", http.StatusConflict)
+		return
+	case err != nil:
+		slog.Error("approve pending link failed", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "approved", "user_id": result.User.ID.String()})
 }
 
 type setPasswordRequest struct {

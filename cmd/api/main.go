@@ -87,7 +87,12 @@ func main() {
 	resolver := &auth.Resolver{
 		Store:          authStore,
 		Mailer:         mailer,
+		AuthSettings:   authSettingsStore,
 		ConfirmBaseURL: publicBaseURL + "/api/auth/confirm-link",
+		// web/ のSPAはまだ存在しないため、暫定的にAPIのJSONエンドポイントへ
+		// 直接誘導する。フロントエンド実装後は、ログイン→一覧表示→承認を
+		// 行う専用ページのURLに差し替えること。
+		PendingLinksURL: publicBaseURL + "/api/auth/pending-links",
 	}
 
 	srv := &server{
@@ -179,6 +184,11 @@ func (logMailer) SendAccountLinkConfirmation(_ context.Context, toEmail, confirm
 
 func (logMailer) SendSignupVerification(_ context.Context, toEmail, verifyURL string) error {
 	slog.Warn("verification email not sent (no SMTP configured)", "to", toEmail, "verify_url", verifyURL)
+	return nil
+}
+
+func (logMailer) SendAccountLinkReviewNotice(_ context.Context, toEmail, reviewURL string) error {
+	slog.Warn("review notice not sent (no SMTP configured)", "to", toEmail, "review_url", reviewURL)
 	return nil
 }
 

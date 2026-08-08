@@ -119,6 +119,47 @@ func (s *AuthStore) FindPendingLinkRequestByTokenHash(ctx context.Context, token
 	}, nil
 }
 
+func (s *AuthStore) FindPendingLinkRequestByID(ctx context.Context, id uuid.UUID) (*auth.PendingLinkRequest, error) {
+	row, err := s.Q.FindPendingLinkRequestByID(ctx, id)
+	if err != nil {
+		return nil, mapNotFound(err)
+	}
+	var confirmedAt *time.Time
+	if row.ConfirmedAt.Valid {
+		t := row.ConfirmedAt.Time
+		confirmedAt = &t
+	}
+	return &auth.PendingLinkRequest{
+		ID:               row.ID,
+		ExistingUserID:   row.ExistingUserID,
+		ProviderType:     auth.ProviderType(row.CandidateProviderType),
+		ProviderConfigID: fromNullUUID(row.CandidateProviderConfigID),
+		Subject:          row.CandidateSubject,
+		ExpiresAt:        row.ExpiresAt.Time,
+		ConfirmedAt:      confirmedAt,
+	}, nil
+}
+
+func (s *AuthStore) FindPendingLinkRequestsForUser(ctx context.Context, userID uuid.UUID) ([]*auth.PendingLinkRequest, error) {
+	rows, err := s.Q.FindPendingLinkRequestsForUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*auth.PendingLinkRequest, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, &auth.PendingLinkRequest{
+			ID:               row.ID,
+			ExistingUserID:   row.ExistingUserID,
+			ProviderType:     auth.ProviderType(row.CandidateProviderType),
+			ProviderConfigID: fromNullUUID(row.CandidateProviderConfigID),
+			Subject:          row.CandidateSubject,
+			ExpiresAt:        row.ExpiresAt.Time,
+			ConfirmedAt:      nil, // クエリでconfirmed_at IS NULLに絞っているため常にnil
+		})
+	}
+	return result, nil
+}
+
 func (s *AuthStore) ConfirmPendingLinkRequest(ctx context.Context, id uuid.UUID, at time.Time) error {
 	return s.Q.ConfirmPendingLinkRequest(ctx, ConfirmPendingLinkRequestParams{ID: id, ConfirmedAt: toTimestamptz(at)})
 }

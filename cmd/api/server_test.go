@@ -154,6 +154,25 @@ func (s *fakeAuthStore) FindPendingLinkRequestByTokenHash(_ context.Context, tok
 	return nil, auth.ErrNotFound
 }
 
+func (s *fakeAuthStore) FindPendingLinkRequestByID(_ context.Context, id uuid.UUID) (*auth.PendingLinkRequest, error) {
+	for _, p := range s.pending {
+		if p.ID == id {
+			return p, nil
+		}
+	}
+	return nil, auth.ErrNotFound
+}
+
+func (s *fakeAuthStore) FindPendingLinkRequestsForUser(_ context.Context, userID uuid.UUID) ([]*auth.PendingLinkRequest, error) {
+	var result []*auth.PendingLinkRequest
+	for _, p := range s.pending {
+		if p.ExistingUserID == userID && p.ConfirmedAt == nil {
+			result = append(result, p)
+		}
+	}
+	return result, nil
+}
+
 func (s *fakeAuthStore) ConfirmPendingLinkRequest(_ context.Context, id uuid.UUID, at time.Time) error {
 	for _, p := range s.pending {
 		if p.ID == id {
@@ -261,6 +280,10 @@ type fakeMailer struct {
 	sentURL string
 	calls   int
 
+	reviewSentTo  string
+	reviewSentURL string
+	reviewCalls   int
+
 	verifySentTo  string
 	verifySentURL string
 	verifyCalls   int
@@ -270,6 +293,13 @@ func (m *fakeMailer) SendAccountLinkConfirmation(_ context.Context, toEmail, con
 	m.sentTo = toEmail
 	m.sentURL = confirmURL
 	m.calls++
+	return nil
+}
+
+func (m *fakeMailer) SendAccountLinkReviewNotice(_ context.Context, toEmail, reviewURL string) error {
+	m.reviewSentTo = toEmail
+	m.reviewSentURL = reviewURL
+	m.reviewCalls++
 	return nil
 }
 
@@ -312,13 +342,20 @@ func (s *fakeSignupStore) DeletePendingSignup(_ context.Context, id uuid.UUID) e
 }
 
 type fakeAuthSettings struct {
-	localAuthEnabled    bool
-	selfSignupEnabled   bool
-	requireConfirmation bool
+	localAuthEnabled            bool
+	selfSignupEnabled           bool
+	requireConfirmation         bool
+	requireReauthForAccountLink bool
 }
 
-func (f *fakeAuthSettings) FindAuthSettings(context.Context) (bool, bool, bool, error) {
-	return f.localAuthEnabled, f.selfSignupEnabled, f.requireConfirmation, nil
+func (f *fakeAuthSettings) FindAuthSettings(context.Context) (bool, bool, bool, bool, error) {
+	return f.localAuthEnabled, f.selfSignupEnabled, f.requireConfirmation, f.requireReauthForAccountLink, nil
+}
+
+// RequireReauthForAccountLink implements auth.AuthSettingsProvider so the
+// same fake can back both server.authSettings and server.resolver.AuthSettings.
+func (f *fakeAuthSettings) RequireReauthForAccountLink(context.Context) (bool, error) {
+	return f.requireReauthForAccountLink, nil
 }
 
 // --- test harness --------------------------------------------------------
@@ -351,9 +388,11 @@ func newTestServer() *testDeps {
 		signupStore: newFakeSignupStore(),
 	}
 	resolver := &auth.Resolver{
-		Store:          d.authStore,
-		Mailer:         d.mailer,
-		ConfirmBaseURL: "http://localhost:8080/api/auth/confirm-link",
+		Store:           d.authStore,
+		Mailer:          d.mailer,
+		AuthSettings:    d.authSettings,
+		ConfirmBaseURL:  "http://localhost:8080/api/auth/confirm-link",
+		PendingLinksURL: "http://localhost:8080/auth/pending-links",
 	}
 	d.server = &server{
 		sessions:  d.sessions,

@@ -111,6 +111,16 @@ func TestAuthStore_FullLifecycle(t *testing.T) {
 		t.Fatalf("FindPendingLinkRequestByTokenHash before confirm: err=%v, pending=%+v", err, pending)
 	}
 
+	byID, err := store.FindPendingLinkRequestByID(ctx, pendingID)
+	if err != nil || byID.ID != pendingID {
+		t.Fatalf("FindPendingLinkRequestByID: err=%v, pending=%+v", err, byID)
+	}
+
+	forUser, err := store.FindPendingLinkRequestsForUser(ctx, user.ID)
+	if err != nil || len(forUser) != 1 || forUser[0].ID != pendingID {
+		t.Fatalf("FindPendingLinkRequestsForUser before confirm: err=%v, pending=%+v", err, forUser)
+	}
+
 	if err := store.ConfirmPendingLinkRequest(ctx, pendingID, time.Now()); err != nil {
 		t.Fatalf("ConfirmPendingLinkRequest: %v", err)
 	}
@@ -118,6 +128,11 @@ func TestAuthStore_FullLifecycle(t *testing.T) {
 	confirmed, err := store.FindPendingLinkRequestByTokenHash(ctx, "tokenhash-1")
 	if err != nil || confirmed.ConfirmedAt == nil {
 		t.Fatalf("expected a confirmed pending request, got err=%v, pending=%+v", err, confirmed)
+	}
+
+	forUserAfterConfirm, err := store.FindPendingLinkRequestsForUser(ctx, user.ID)
+	if err != nil || len(forUserAfterConfirm) != 0 {
+		t.Fatalf("a confirmed request must not be listed as pending, got err=%v, pending=%+v", err, forUserAfterConfirm)
 	}
 
 	if err := store.RecordAuditLog(ctx, auth.AuditLogEntry{
@@ -312,6 +327,25 @@ func TestLocalSignupVerificationStore_CreateFindDelete(t *testing.T) {
 	}
 	if _, err := store.FindPendingSignupByTokenHash(ctx, "tokenhash-1"); !errors.Is(err, auth.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound after delete, got %v", err)
+	}
+}
+
+func TestAuthSettingsStore_DefaultsToSecureAccountLinkMode(t *testing.T) {
+	pool := setupPostgres(t)
+	store := storage.NewAuthSettingsStore(pool)
+	ctx := context.Background()
+
+	_, _, _, requireReauth, err := store.FindAuthSettings(ctx)
+	if err != nil {
+		t.Fatalf("FindAuthSettings: %v", err)
+	}
+	if !requireReauth {
+		t.Fatalf("expected require_reauth_for_account_link to default to true (secure), got false")
+	}
+
+	viaProvider, err := store.RequireReauthForAccountLink(ctx)
+	if err != nil || !viaProvider {
+		t.Fatalf("RequireReauthForAccountLink: err=%v, got=%v", err, viaProvider)
 	}
 }
 

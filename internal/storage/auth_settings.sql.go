@@ -10,7 +10,7 @@ import (
 )
 
 const findAuthSettings = `-- name: FindAuthSettings :one
-SELECT local_auth_enabled, self_signup_enabled, require_email_confirmation_for_signup
+SELECT local_auth_enabled, self_signup_enabled, require_email_confirmation_for_signup, require_reauth_for_account_link
 FROM auth_settings
 WHERE id
 `
@@ -19,11 +19,17 @@ type FindAuthSettingsRow struct {
 	LocalAuthEnabled                  bool `json:"local_auth_enabled"`
 	SelfSignupEnabled                 bool `json:"self_signup_enabled"`
 	RequireEmailConfirmationForSignup bool `json:"require_email_confirmation_for_signup"`
+	RequireReauthForAccountLink       bool `json:"require_reauth_for_account_link"`
 }
 
 func (q *Queries) FindAuthSettings(ctx context.Context) (*FindAuthSettingsRow, error) {
 	row := q.db.QueryRow(ctx, findAuthSettings)
 	var i FindAuthSettingsRow
-	err := row.Scan(&i.LocalAuthEnabled, &i.SelfSignupEnabled, &i.RequireEmailConfirmationForSignup)
+	err := row.Scan(
+		&i.LocalAuthEnabled,
+		&i.SelfSignupEnabled,
+		&i.RequireEmailConfirmationForSignup,
+		&i.RequireReauthForAccountLink,
+	)
 	return &i, err
 }

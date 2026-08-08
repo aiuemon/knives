@@ -103,15 +103,45 @@ type Store interface {
 	TouchAuthIdentity(ctx context.Context, id uuid.UUID, at time.Time) error
 	CreatePendingLinkRequest(ctx context.Context, existingUserID uuid.UUID, providerType ProviderType, providerConfigID *uuid.UUID, subject, tokenHash string, expiresAt time.Time) (uuid.UUID, error)
 	FindPendingLinkRequestByTokenHash(ctx context.Context, tokenHash string) (*PendingLinkRequest, error)
+	// FindPendingLinkRequestByID returns ErrNotFound if no such request
+	// exists. Callers MUST still check ExistingUserID against whoever is
+	// asking before acting on it — this method does no authorization.
+	FindPendingLinkRequestByID(ctx context.Context, id uuid.UUID) (*PendingLinkRequest, error)
+	// FindPendingLinkRequestsForUser lists userID's own unconfirmed,
+	// unexpired pending link requests (reauth-based approval flow).
+	FindPendingLinkRequestsForUser(ctx context.Context, userID uuid.UUID) ([]*PendingLinkRequest, error)
 	ConfirmPendingLinkRequest(ctx context.Context, id uuid.UUID, at time.Time) error
 	RecordAuditLog(ctx context.Context, entry AuditLogEntry) error
 }
 
-// ConfirmationMailer sends the account-linking confirmation email
-// (3.4節-4). It is always addressed to the existing account's current
-// registered email, never to the email claimed by the new login attempt.
+// AuthSettingsProvider lets Resolver check the admin-configurable
+// account-link approval mode (auth_settings.require_reauth_for_account_link).
+// Checked fresh on every confirmation request, never cached, so a setting
+// change takes effect immediately without restarting the process.
+type AuthSettingsProvider interface {
+	// RequireReauthForAccountLink reports which approval mode is active:
+	//   true  (secure, default): the approver must authenticate via the
+	//         existing account's own login method before a pending link is
+	//         attached — proves continued control of the account itself,
+	//         not just of the mailbox.
+	//   false (legacy): the emailed link alone completes the link, which
+	//         proves only that the clicker can receive mail at that
+	//         address at this moment.
+	RequireReauthForAccountLink(ctx context.Context) (bool, error)
+}
+
+// ConfirmationMailer sends the account-link notice (3.4節-4). Both methods
+// are always addressed to the existing account's current registered email,
+// never to the email claimed by the new login attempt. Which one Resolver
+// calls depends on AuthSettingsProvider.RequireReauthForAccountLink.
 type ConfirmationMailer interface {
+	// SendAccountLinkConfirmation is the legacy, one-click flow: opening
+	// confirmURL immediately attaches the identity.
 	SendAccountLinkConfirmation(ctx context.Context, toEmail, confirmURL string) error
+	// SendAccountLinkReviewNotice is the secure, reauth-required flow:
+	// reviewURL only takes the recipient to a page where they must first
+	// log in via their existing method before they can approve anything.
+	SendAccountLinkReviewNotice(ctx context.Context, toEmail, reviewURL string) error
 }
 
 type Outcome int
@@ -128,13 +158,19 @@ type Result struct {
 }
 
 type Resolver struct {
-	Store  Store
-	Mailer ConfirmationMailer
+	Store        Store
+	Mailer       ConfirmationMailer
+	AuthSettings AuthSettingsProvider
 	// Now defaults to time.Now when nil; override in tests.
 	Now func() time.Time
-	// ConfirmBaseURL is the confirmation page URL; the raw token is appended
-	// as a "token" query parameter.
+	// ConfirmBaseURL is the legacy one-click confirmation page URL; the raw
+	// token is appended as a "token" query parameter. Only used when
+	// AuthSettings reports RequireReauthForAccountLink == false.
 	ConfirmBaseURL string
+	// PendingLinksURL is where the secure-mode notice email sends the
+	// recipient to log in and review their pending link requests. Only
+	// used when AuthSettings reports RequireReauthForAccountLink == true.
+	PendingLinksURL string
 	// TokenTTL defaults to DefaultPendingLinkTTL when zero.
 	TokenTTL time.Duration
 }
@@ -257,6 +293,56 @@ func (r *Resolver) ConfirmPendingLink(ctx context.Context, rawToken string) (*Re
 	return &Result{Outcome: OutcomeLoggedIn, User: user}, nil
 }
 
+// ListPendingLinks returns userID's own unconfirmed, unexpired pending
+// link requests — the "you have pending account-link requests" list shown
+// after they log in via their existing method (secure/reauth mode).
+func (r *Resolver) ListPendingLinks(ctx context.Context, userID uuid.UUID) ([]*PendingLinkRequest, error) {
+	return r.Store.FindPendingLinkRequestsForUser(ctx, userID)
+}
+
+// ApprovePendingLink completes a pending link request in the secure/reauth
+// mode: unlike ConfirmPendingLink, presenting requestID alone is never
+// sufficient — approverUserID (the caller's own already-authenticated
+// session, established via the account's EXISTING login method) must equal
+// the request's ExistingUserID, or the request is treated as not found so
+// its existence isn't leaked to anyone probing another user's request IDs.
+func (r *Resolver) ApprovePendingLink(ctx context.Context, approverUserID, requestID uuid.UUID) (*Result, error) {
+	now := r.now()
+
+	pending, err := r.Store.FindPendingLinkRequestByID(ctx, requestID)
+	if err != nil {
+		return nil, err
+	}
+	if pending.ExistingUserID != approverUserID {
+		return nil, ErrNotFound
+	}
+	if pending.ConfirmedAt != nil {
+		return nil, ErrTokenAlreadyUsed
+	}
+	if now.After(pending.ExpiresAt) {
+		return nil, ErrTokenExpired
+	}
+
+	user, err := r.Store.FindUserByID(ctx, approverUserID)
+	if err != nil {
+		return nil, err
+	}
+
+	identity, err := r.Store.CreateAuthIdentity(ctx, user.ID, pending.ProviderType, pending.ProviderConfigID, pending.Subject, user.Email, true)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.Store.ConfirmPendingLinkRequest(ctx, pending.ID, now); err != nil {
+		return nil, err
+	}
+	if err := r.recordLinkAudit(ctx, user.ID, identity.ID, pending.ProviderType, map[string]any{
+		"via": "reauth_approval",
+	}); err != nil {
+		return nil, err
+	}
+	return &Result{Outcome: OutcomeLoggedIn, User: user}, nil
+}
+
 func (r *Resolver) attachIdentity(ctx context.Context, userID uuid.UUID, attempt LoginAttempt, newUser bool) error {
 	identity, err := r.Store.CreateAuthIdentity(ctx, userID, attempt.ProviderType, attempt.ProviderConfigID, attempt.Subject, attempt.Email, true)
 	if err != nil {
@@ -295,11 +381,22 @@ func (r *Resolver) requestConfirmation(ctx context.Context, existingUserID uuid.
 		return err
 	}
 
-	// 確認メールは常に「現在の」既存アカウントの登録メール宛に送る。
+	// 通知は常に「現在の」既存アカウントの登録メール宛に送る。
 	// attempt.Email(なりすましの可能性がある側)には絶対に送らない。
 	existingUser, err := r.Store.FindUserByID(ctx, existingUserID)
 	if err != nil {
 		return err
+	}
+
+	requireReauth, err := r.AuthSettings.RequireReauthForAccountLink(ctx)
+	if err != nil {
+		return err
+	}
+	if requireReauth {
+		// rawTokenはスキーマ上(token_hash NOT NULL)生成するが、メールには
+		// 載せない: 承認はApprovePendingLinkで既存ログイン方法による再認証
+		// を必須とし、トークンの知得だけでは承認できないようにするため。
+		return r.Mailer.SendAccountLinkReviewNotice(ctx, existingUser.Email, r.PendingLinksURL)
 	}
 	confirmURL := fmt.Sprintf("%s?token=%s", r.ConfirmBaseURL, rawToken)
 	return r.Mailer.SendAccountLinkConfirmation(ctx, existingUser.Email, confirmURL)

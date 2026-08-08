@@ -252,6 +252,7 @@ type AuthSetting struct {
 	LocalAuthEnabled                  bool `json:"local_auth_enabled"`
 	SelfSignupEnabled                 bool `json:"self_signup_enabled"`
 	RequireEmailConfirmationForSignup bool `json:"require_email_confirmation_for_signup"`
+	RequireReauthForAccountLink       bool `json:"require_reauth_for_account_link"`
 }
 
 type ClickEvent struct {

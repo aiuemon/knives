@@ -59,6 +59,37 @@ func (q *Queries) CreatePendingLinkRequest(ctx context.Context, arg CreatePendin
 	return id, err
 }
 
+const findPendingLinkRequestByID = `-- name: FindPendingLinkRequestByID :one
+SELECT id, existing_user_id, candidate_provider_type, candidate_provider_config_id, candidate_subject, expires_at, confirmed_at
+FROM pending_link_requests
+WHERE id = $1
+`
+
+type FindPendingLinkRequestByIDRow struct {
+	ID                        uuid.UUID          `json:"id"`
+	ExistingUserID            uuid.UUID          `json:"existing_user_id"`
+	CandidateProviderType     AuthProviderType   `json:"candidate_provider_type"`
+	CandidateProviderConfigID uuid.NullUUID      `json:"candidate_provider_config_id"`
+	CandidateSubject          string             `json:"candidate_subject"`
+	ExpiresAt                 pgtype.Timestamptz `json:"expires_at"`
+	ConfirmedAt               pgtype.Timestamptz `json:"confirmed_at"`
+}
+
+func (q *Queries) FindPendingLinkRequestByID(ctx context.Context, id uuid.UUID) (*FindPendingLinkRequestByIDRow, error) {
+	row := q.db.QueryRow(ctx, findPendingLinkRequestByID, id)
+	var i FindPendingLinkRequestByIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.ExistingUserID,
+		&i.CandidateProviderType,
+		&i.CandidateProviderConfigID,
+		&i.CandidateSubject,
+		&i.ExpiresAt,
+		&i.ConfirmedAt,
+	)
+	return &i, err
+}
+
 const findPendingLinkRequestByTokenHash = `-- name: FindPendingLinkRequestByTokenHash :one
 SELECT id, existing_user_id, candidate_provider_type, candidate_provider_config_id, candidate_subject, expires_at, confirmed_at
 FROM pending_link_requests
@@ -88,4 +119,51 @@ func (q *Queries) FindPendingLinkRequestByTokenHash(ctx context.Context, tokenHa
 		&i.ConfirmedAt,
 	)
 	return &i, err
+}
+
+const findPendingLinkRequestsForUser = `-- name: FindPendingLinkRequestsForUser :many
+SELECT id, existing_user_id, candidate_provider_type, candidate_provider_config_id, candidate_subject, expires_at, confirmed_at
+FROM pending_link_requests
+WHERE existing_user_id = $1
+  AND confirmed_at IS NULL
+  AND expires_at > now()
+ORDER BY expires_at ASC
+`
+
+type FindPendingLinkRequestsForUserRow struct {
+	ID                        uuid.UUID          `json:"id"`
+	ExistingUserID            uuid.UUID          `json:"existing_user_id"`
+	CandidateProviderType     AuthProviderType   `json:"candidate_provider_type"`
+	CandidateProviderConfigID uuid.NullUUID      `json:"candidate_provider_config_id"`
+	CandidateSubject          string             `json:"candidate_subject"`
+	ExpiresAt                 pgtype.Timestamptz `json:"expires_at"`
+	ConfirmedAt               pgtype.Timestamptz `json:"confirmed_at"`
+}
+
+func (q *Queries) FindPendingLinkRequestsForUser(ctx context.Context, existingUserID uuid.UUID) ([]*FindPendingLinkRequestsForUserRow, error) {
+	rows, err := q.db.Query(ctx, findPendingLinkRequestsForUser, existingUserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*FindPendingLinkRequestsForUserRow
+	for rows.Next() {
+		var i FindPendingLinkRequestsForUserRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ExistingUserID,
+			&i.CandidateProviderType,
+			&i.CandidateProviderConfigID,
+			&i.CandidateSubject,
+			&i.ExpiresAt,
+			&i.ConfirmedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

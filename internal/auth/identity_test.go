@@ -100,6 +100,25 @@ func (s *fakeStore) FindPendingLinkRequestByTokenHash(_ context.Context, tokenHa
 	return nil, ErrNotFound
 }
 
+func (s *fakeStore) FindPendingLinkRequestByID(_ context.Context, id uuid.UUID) (*PendingLinkRequest, error) {
+	for _, p := range s.pending {
+		if p.ID == id {
+			return p, nil
+		}
+	}
+	return nil, ErrNotFound
+}
+
+func (s *fakeStore) FindPendingLinkRequestsForUser(_ context.Context, userID uuid.UUID) ([]*PendingLinkRequest, error) {
+	var result []*PendingLinkRequest
+	for _, p := range s.pending {
+		if p.ExistingUserID == userID && p.ConfirmedAt == nil {
+			result = append(result, p)
+		}
+	}
+	return result, nil
+}
+
 func (s *fakeStore) ConfirmPendingLinkRequest(_ context.Context, id uuid.UUID, at time.Time) error {
 	for _, p := range s.pending {
 		if p.ID == id {
@@ -120,6 +139,10 @@ type fakeMailer struct {
 	sentTo  string
 	sentURL string
 	calls   int
+
+	reviewSentTo  string
+	reviewSentURL string
+	reviewCalls   int
 }
 
 func (m *fakeMailer) SendAccountLinkConfirmation(_ context.Context, toEmail, confirmURL string) error {
@@ -129,13 +152,34 @@ func (m *fakeMailer) SendAccountLinkConfirmation(_ context.Context, toEmail, con
 	return nil
 }
 
+func (m *fakeMailer) SendAccountLinkReviewNotice(_ context.Context, toEmail, reviewURL string) error {
+	m.reviewSentTo = toEmail
+	m.reviewSentURL = reviewURL
+	m.reviewCalls++
+	return nil
+}
+
+type fakeAuthSettingsProvider struct {
+	requireReauth bool
+}
+
+func (f *fakeAuthSettingsProvider) RequireReauthForAccountLink(_ context.Context) (bool, error) {
+	return f.requireReauth, nil
+}
+
+// newTestResolver defaults to legacy (one-click) confirmation so existing
+// identity-resolution tests don't have to care about the approval mode;
+// tests specifically about the reauth-based approval flow build their own
+// Resolver with AuthSettings{requireReauth: true}.
 func newTestResolver(store *fakeStore, mailer *fakeMailer) *Resolver {
 	fixedNow := time.Date(2026, 8, 7, 0, 0, 0, 0, time.UTC)
 	return &Resolver{
-		Store:          store,
-		Mailer:         mailer,
-		Now:            func() time.Time { return fixedNow },
-		ConfirmBaseURL: "https://go.example.com/auth/confirm-link",
+		Store:           store,
+		Mailer:          mailer,
+		AuthSettings:    &fakeAuthSettingsProvider{requireReauth: false},
+		Now:             func() time.Time { return fixedNow },
+		ConfirmBaseURL:  "https://go.example.com/auth/confirm-link",
+		PendingLinksURL: "https://go.example.com/auth/pending-links",
 	}
 }
 
@@ -373,6 +417,7 @@ func TestConfirmPendingLink_Expired(t *testing.T) {
 	r := &Resolver{
 		Store:          store,
 		Mailer:         mailer,
+		AuthSettings:   &fakeAuthSettingsProvider{requireReauth: false},
 		Now:            func() time.Time { return current },
 		ConfirmBaseURL: "https://go.example.com/auth/confirm-link",
 		TokenTTL:       time.Minute,
@@ -396,5 +441,199 @@ func TestConfirmPendingLink_Expired(t *testing.T) {
 
 	if _, err := r.ConfirmPendingLink(ctx, token); !errors.Is(err, ErrTokenExpired) {
 		t.Fatalf("expected ErrTokenExpired, got %v", err)
+	}
+}
+
+func TestResolve_ReauthMode_SendsReviewNoticeInsteadOfOneClickLink(t *testing.T) {
+	store := newFakeStore()
+	mailer := &fakeMailer{}
+	r := newTestResolver(store, mailer)
+	r.AuthSettings = &fakeAuthSettingsProvider{requireReauth: true}
+	ctx := context.Background()
+
+	victim, _ := store.CreateUser(ctx, "victim@example.com", true)
+	oidcCfg := uuid.New()
+	_, _ = store.CreateAuthIdentity(ctx, victim.ID, ProviderOIDC, &oidcCfg, "victim-sub", "victim@example.com", true)
+
+	res, err := r.Resolve(ctx, LoginAttempt{
+		ProviderType: ProviderLocal,
+		Subject:      "victim@example.com",
+		Email:        "victim@example.com",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Outcome != OutcomePendingConfirmation {
+		t.Fatalf("expected OutcomePendingConfirmation, got %v", res.Outcome)
+	}
+	if mailer.reviewCalls != 1 || mailer.reviewSentTo != "victim@example.com" {
+		t.Fatalf("expected a review-notice email in reauth mode, got %+v", mailer)
+	}
+	if mailer.calls != 0 {
+		t.Fatalf("reauth mode must not send the one-click confirmation email, got %d calls", mailer.calls)
+	}
+}
+
+func TestResolver_ApprovePendingLink_Success(t *testing.T) {
+	store := newFakeStore()
+	mailer := &fakeMailer{}
+	r := newTestResolver(store, mailer)
+	r.AuthSettings = &fakeAuthSettingsProvider{requireReauth: true}
+	ctx := context.Background()
+
+	victim, _ := store.CreateUser(ctx, "victim@example.com", true)
+	oidcCfg := uuid.New()
+	_, _ = store.CreateAuthIdentity(ctx, victim.ID, ProviderOIDC, &oidcCfg, "victim-sub", "victim@example.com", true)
+	auditBefore := len(store.audit)
+
+	if _, err := r.Resolve(ctx, LoginAttempt{
+		ProviderType: ProviderLocal,
+		Subject:      "victim@example.com",
+		Email:        "victim@example.com",
+	}); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	pending, err := r.ListPendingLinks(ctx, victim.ID)
+	if err != nil {
+		t.Fatalf("ListPendingLinks: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("expected exactly one pending link for the victim, got %d", len(pending))
+	}
+
+	res, err := r.ApprovePendingLink(ctx, victim.ID, pending[0].ID)
+	if err != nil {
+		t.Fatalf("ApprovePendingLink: %v", err)
+	}
+	if res.Outcome != OutcomeLoggedIn || res.User.ID != victim.ID {
+		t.Fatalf("expected the approver to be logged in as themselves, got %+v", res)
+	}
+	if store.identCount[victim.ID] != 2 {
+		t.Fatalf("expected the local identity to be attached after approval")
+	}
+	if len(store.audit) != auditBefore+1 {
+		t.Fatalf("expected an account.link audit entry to be recorded")
+	}
+
+	// 再承認はエラーになる。
+	if _, err := r.ApprovePendingLink(ctx, victim.ID, pending[0].ID); !errors.Is(err, ErrTokenAlreadyUsed) {
+		t.Fatalf("expected ErrTokenAlreadyUsed on re-approval, got %v", err)
+	}
+}
+
+func TestResolver_ApprovePendingLink_RejectsWrongApprover(t *testing.T) {
+	store := newFakeStore()
+	mailer := &fakeMailer{}
+	r := newTestResolver(store, mailer)
+	r.AuthSettings = &fakeAuthSettingsProvider{requireReauth: true}
+	ctx := context.Background()
+
+	victim, _ := store.CreateUser(ctx, "victim@example.com", true)
+	oidcCfg := uuid.New()
+	_, _ = store.CreateAuthIdentity(ctx, victim.ID, ProviderOIDC, &oidcCfg, "victim-sub", "victim@example.com", true)
+	bystander, _ := store.CreateUser(ctx, "bystander@example.com", true)
+
+	if _, err := r.Resolve(ctx, LoginAttempt{
+		ProviderType: ProviderLocal,
+		Subject:      "victim@example.com",
+		Email:        "victim@example.com",
+	}); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	pending, err := r.ListPendingLinks(ctx, victim.ID)
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("ListPendingLinks: %v, %+v", err, pending)
+	}
+
+	// bystanderが他人の保留リクエストIDを知っていても承認できない
+	// (存在自体もErrNotFoundとして秘匿する)。
+	if _, err := r.ApprovePendingLink(ctx, bystander.ID, pending[0].ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for a non-owning approver, got %v", err)
+	}
+	if store.identCount[victim.ID] != 1 {
+		t.Fatalf("victim's identity count must be unaffected by the rejected approval attempt")
+	}
+}
+
+func TestResolver_ApprovePendingLink_ExpiredIsRejected(t *testing.T) {
+	store := newFakeStore()
+	mailer := &fakeMailer{}
+	current := time.Date(2026, 8, 7, 0, 0, 0, 0, time.UTC)
+	r := &Resolver{
+		Store:           store,
+		Mailer:          mailer,
+		AuthSettings:    &fakeAuthSettingsProvider{requireReauth: true},
+		Now:             func() time.Time { return current },
+		PendingLinksURL: "https://go.example.com/auth/pending-links",
+		TokenTTL:        time.Minute,
+	}
+	ctx := context.Background()
+
+	victim, _ := store.CreateUser(ctx, "victim@example.com", true)
+	oidcCfg := uuid.New()
+	_, _ = store.CreateAuthIdentity(ctx, victim.ID, ProviderOIDC, &oidcCfg, "victim-sub", "victim@example.com", true)
+
+	if _, err := r.Resolve(ctx, LoginAttempt{
+		ProviderType: ProviderLocal,
+		Subject:      "victim@example.com",
+		Email:        "victim@example.com",
+	}); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	var pendingID uuid.UUID
+	for _, p := range store.pending {
+		pendingID = p.ID
+	}
+
+	current = current.Add(2 * time.Minute)
+
+	if _, err := r.ApprovePendingLink(ctx, victim.ID, pendingID); !errors.Is(err, ErrTokenExpired) {
+		t.Fatalf("expected ErrTokenExpired, got %v", err)
+	}
+}
+
+func TestResolver_ListPendingLinks_OnlyReturnsThatUsersUnconfirmedRequests(t *testing.T) {
+	store := newFakeStore()
+	mailer := &fakeMailer{}
+	r := newTestResolver(store, mailer)
+	r.AuthSettings = &fakeAuthSettingsProvider{requireReauth: true}
+	ctx := context.Background()
+
+	userA, _ := store.CreateUser(ctx, "a@example.com", true)
+	cfgA := uuid.New()
+	_, _ = store.CreateAuthIdentity(ctx, userA.ID, ProviderOIDC, &cfgA, "a-sub", "a@example.com", true)
+
+	userB, _ := store.CreateUser(ctx, "b@example.com", true)
+	cfgB := uuid.New()
+	_, _ = store.CreateAuthIdentity(ctx, userB.ID, ProviderOIDC, &cfgB, "b-sub", "b@example.com", true)
+
+	if _, err := r.Resolve(ctx, LoginAttempt{ProviderType: ProviderLocal, Subject: "a@example.com", Email: "a@example.com"}); err != nil {
+		t.Fatalf("Resolve A: %v", err)
+	}
+	if _, err := r.Resolve(ctx, LoginAttempt{ProviderType: ProviderLocal, Subject: "b@example.com", Email: "b@example.com"}); err != nil {
+		t.Fatalf("Resolve B: %v", err)
+	}
+
+	pendingA, err := r.ListPendingLinks(ctx, userA.ID)
+	if err != nil || len(pendingA) != 1 {
+		t.Fatalf("expected exactly one pending link for userA, got err=%v pending=%+v", err, pendingA)
+	}
+
+	if _, err := r.ApprovePendingLink(ctx, userA.ID, pendingA[0].ID); err != nil {
+		t.Fatalf("ApprovePendingLink: %v", err)
+	}
+
+	afterApproval, err := r.ListPendingLinks(ctx, userA.ID)
+	if err != nil {
+		t.Fatalf("ListPendingLinks after approval: %v", err)
+	}
+	if len(afterApproval) != 0 {
+		t.Fatalf("a confirmed request must not be listed as pending anymore, got %+v", afterApproval)
+	}
+
+	pendingB, err := r.ListPendingLinks(ctx, userB.ID)
+	if err != nil || len(pendingB) != 1 {
+		t.Fatalf("expected userB's pending link to be unaffected, got err=%v pending=%+v", err, pendingB)
 	}
 }
