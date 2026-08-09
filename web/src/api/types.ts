@@ -41,3 +41,14 @@ export interface AdminUser {
 	status: string;
 	created_at: string;
 }
+
+export interface SAMLConfig {
+	id: string;
+	name: string;
+	idp_entity_id: string;
+	idp_sso_url: string;
+	idp_certificate: string;
+	email_attribute: string;
+	trusted: boolean;
+	enabled: boolean;
+}

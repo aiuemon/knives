@@ -12,13 +12,16 @@ import (
 
 type Querier interface {
 	ConfirmPendingLinkRequest(ctx context.Context, arg ConfirmPendingLinkRequestParams) error
+	CountAuthIdentitiesForSAMLConfig(ctx context.Context, providerConfigID uuid.NullUUID) (int64, error)
 	CountAuthIdentitiesForUser(ctx context.Context, userID uuid.UUID) (int64, error)
 	CountURLOwners(ctx context.Context, shortUrlID uuid.UUID) (int64, error)
 	CreateAuthIdentity(ctx context.Context, arg CreateAuthIdentityParams) (*CreateAuthIdentityRow, error)
 	CreateLocalSignupVerification(ctx context.Context, arg CreateLocalSignupVerificationParams) (uuid.UUID, error)
 	CreatePendingLinkRequest(ctx context.Context, arg CreatePendingLinkRequestParams) (uuid.UUID, error)
+	CreateSAMLConfig(ctx context.Context, arg CreateSAMLConfigParams) (*IdpSamlConfig, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (*CreateUserRow, error)
 	DeleteLocalSignupVerification(ctx context.Context, id uuid.UUID) error
+	DeleteSAMLConfig(ctx context.Context, id uuid.UUID) (int64, error)
 	DeleteURLPermission(ctx context.Context, arg DeleteURLPermissionParams) error
 	FindAdminUserByID(ctx context.Context, id uuid.UUID) (*FindAdminUserByIDRow, error)
 	FindAuthIdentity(ctx context.Context, arg FindAuthIdentityParams) (*FindAuthIdentityRow, error)
@@ -31,6 +34,7 @@ type Querier interface {
 	FindPendingLinkRequestByTokenHash(ctx context.Context, tokenHash string) (*FindPendingLinkRequestByTokenHashRow, error)
 	FindPendingLinkRequestsForUser(ctx context.Context, existingUserID uuid.UUID) ([]*FindPendingLinkRequestsForUserRow, error)
 	FindRedirectTarget(ctx context.Context, arg FindRedirectTargetParams) (*FindRedirectTargetRow, error)
+	FindSAMLConfigByID(ctx context.Context, id uuid.UUID) (*IdpSamlConfig, error)
 	FindShortCodeSettings(ctx context.Context) (*FindShortCodeSettingsRow, error)
 	FindShortURLByID(ctx context.Context, id uuid.UUID) (*ShortUrl, error)
 	FindURLPermission(ctx context.Context, arg FindURLPermissionParams) (UrlPermissionRole, error)
@@ -39,6 +43,7 @@ type Querier interface {
 	InsertShortURL(ctx context.Context, arg InsertShortURLParams) (uuid.UUID, error)
 	InsertURLPermission(ctx context.Context, arg InsertURLPermissionParams) error
 	ListAllShortURLs(ctx context.Context, arg ListAllShortURLsParams) ([]*ShortUrl, error)
+	ListSAMLConfigs(ctx context.Context) ([]*IdpSamlConfig, error)
 	ListShortURLsForUser(ctx context.Context, arg ListShortURLsForUserParams) ([]*ShortUrl, error)
 	ListURLPermissions(ctx context.Context, shortUrlID uuid.UUID) ([]*ListURLPermissionsRow, error)
 	ListUsers(ctx context.Context, arg ListUsersParams) ([]*ListUsersRow, error)
@@ -50,6 +55,7 @@ type Querier interface {
 	SetUserStatus(ctx context.Context, arg SetUserStatusParams) (int64, error)
 	TouchAuthIdentity(ctx context.Context, arg TouchAuthIdentityParams) error
 	UpdateAuthSettings(ctx context.Context, arg UpdateAuthSettingsParams) error
+	UpdateSAMLConfig(ctx context.Context, arg UpdateSAMLConfigParams) (*IdpSamlConfig, error)
 	UpdateShortURLFields(ctx context.Context, arg UpdateShortURLFieldsParams) (*ShortUrl, error)
 	UpsertLocalCredentialPassword(ctx context.Context, arg UpsertLocalCredentialPasswordParams) error
 	UpsertURLPermission(ctx context.Context, arg UpsertURLPermissionParams) error

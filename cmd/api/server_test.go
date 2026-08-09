@@ -3,7 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -530,6 +535,64 @@ func (f *fakeAuthSettings) UpdateAuthSettings(_ context.Context, localAuthEnable
 	return nil
 }
 
+type fakeSAMLConfigStore struct {
+	configs    map[uuid.UUID]*auth.SAMLConfig
+	identCount map[uuid.UUID]int
+}
+
+func newFakeSAMLConfigStore() *fakeSAMLConfigStore {
+	return &fakeSAMLConfigStore{configs: map[uuid.UUID]*auth.SAMLConfig{}, identCount: map[uuid.UUID]int{}}
+}
+
+func (s *fakeSAMLConfigStore) ListSAMLConfigs(context.Context) ([]*auth.SAMLConfig, error) {
+	result := make([]*auth.SAMLConfig, 0, len(s.configs))
+	for _, c := range s.configs {
+		result = append(result, c)
+	}
+	return result, nil
+}
+
+func (s *fakeSAMLConfigStore) FindSAMLConfigByID(_ context.Context, id uuid.UUID) (*auth.SAMLConfig, error) {
+	c, ok := s.configs[id]
+	if !ok {
+		return nil, auth.ErrNotFound
+	}
+	return c, nil
+}
+
+func (s *fakeSAMLConfigStore) CreateSAMLConfig(_ context.Context, in auth.SAMLConfigInput) (*auth.SAMLConfig, error) {
+	c := &auth.SAMLConfig{
+		ID: uuid.New(), Name: in.Name, IdPEntityID: in.IdPEntityID, IdPSSOURL: in.IdPSSOURL,
+		IdPCertificate: in.IdPCertificate, EmailAttribute: in.EmailAttribute, Trusted: in.Trusted, Enabled: in.Enabled,
+	}
+	s.configs[c.ID] = c
+	return c, nil
+}
+
+func (s *fakeSAMLConfigStore) UpdateSAMLConfig(_ context.Context, id uuid.UUID, in auth.SAMLConfigInput) (*auth.SAMLConfig, error) {
+	if _, ok := s.configs[id]; !ok {
+		return nil, auth.ErrNotFound
+	}
+	c := &auth.SAMLConfig{
+		ID: id, Name: in.Name, IdPEntityID: in.IdPEntityID, IdPSSOURL: in.IdPSSOURL,
+		IdPCertificate: in.IdPCertificate, EmailAttribute: in.EmailAttribute, Trusted: in.Trusted, Enabled: in.Enabled,
+	}
+	s.configs[id] = c
+	return c, nil
+}
+
+func (s *fakeSAMLConfigStore) DeleteSAMLConfig(_ context.Context, id uuid.UUID) error {
+	if _, ok := s.configs[id]; !ok {
+		return auth.ErrNotFound
+	}
+	delete(s.configs, id)
+	return nil
+}
+
+func (s *fakeSAMLConfigStore) CountAuthIdentitiesForSAMLConfig(_ context.Context, id uuid.UUID) (int, error) {
+	return s.identCount[id], nil
+}
+
 // --- test harness --------------------------------------------------------
 
 type testDeps struct {
@@ -543,6 +606,7 @@ type testDeps struct {
 	mailer       *fakeMailer
 	authSettings *fakeAuthSettings
 	signupStore  *fakeSignupStore
+	samlConfigs  *fakeSAMLConfigStore
 }
 
 func newTestServer() *testDeps {
@@ -560,6 +624,7 @@ func newTestServer() *testDeps {
 			requireConfirmation: false,
 		},
 		signupStore: newFakeSignupStore(),
+		samlConfigs: newFakeSAMLConfigStore(),
 	}
 	resolver := &auth.Resolver{
 		Store:           d.authStore,
@@ -585,6 +650,7 @@ func newTestServer() *testDeps {
 		shortURLs:         &shorturl.Service{Store: d.shortURLs},
 		shortURLGet:       d.shortURLs,
 		cache:             d.cache,
+		samlConfigs:       &auth.SAMLConfigService{Store: d.samlConfigs},
 		domainID:          uuid.New(),
 		sessionCookieName: "knives_session",
 		sessionTTL:        time.Hour,
@@ -1438,5 +1504,216 @@ func TestHandlePatchUser_UnknownUserIsNotFound(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected 404 for an unknown user id, got %d", rec.Code)
+	}
+}
+
+// --- SAML config handler tests ----------------------------------------------
+
+func testCertPEM(t *testing.T) string {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create certificate: %v", err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+}
+
+func validSAMLConfigRequest(t *testing.T) samlConfigRequest {
+	return samlConfigRequest{
+		Name:           "社内ADFS",
+		IdPEntityID:    "https://adfs.example.com/adfs/services/trust",
+		IdPSSOURL:      "https://adfs.example.com/adfs/ls/",
+		IdPCertificate: testCertPEM(t),
+		EmailAttribute: "email",
+		Trusted:        true,
+		Enabled:        true,
+	}
+}
+
+func loginAsAdmin(t *testing.T, d *testDeps) string {
+	t.Helper()
+	ctx := context.Background()
+	admin, err := d.authStore.CreateUser(ctx, "admin@example.com", true)
+	if err != nil {
+		t.Fatalf("create admin: %v", err)
+	}
+	d.permissions.admins[admin.ID] = true
+	token, err := d.sessions.Create(ctx, admin.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	return token
+}
+
+func TestHandleCreateSAMLConfig_Success(t *testing.T) {
+	d := newTestServer()
+	token := loginAsAdmin(t, d)
+
+	body, _ := json.Marshal(validSAMLConfigRequest(t))
+	req := withSessionCookie(httptest.NewRequest(http.MethodPost, "/api/admin/saml-configs", bytes.NewReader(body)), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp samlConfigResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Name != "社内ADFS" || !resp.Trusted {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+
+	found := false
+	for _, entry := range d.authStore.audit {
+		if entry.Action == "admin.saml_config_created" && entry.TargetID == resp.ID.String() {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected an admin.saml_config_created audit entry, got %+v", d.authStore.audit)
+	}
+}
+
+func TestHandleCreateSAMLConfig_InvalidCertificateRejected(t *testing.T) {
+	d := newTestServer()
+	token := loginAsAdmin(t, d)
+
+	req := validSAMLConfigRequest(t)
+	req.IdPCertificate = "not a certificate"
+	body, _ := json.Marshal(req)
+	httpReq := withSessionCookie(httptest.NewRequest(http.MethodPost, "/api/admin/saml-configs", bytes.NewReader(body)), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, httpReq)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for an invalid certificate, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(d.samlConfigs.configs) != 0 {
+		t.Fatalf("expected no config to be stored on validation failure")
+	}
+}
+
+func TestHandleListSAMLConfigs_NonAdminForbidden(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+	user, _ := d.authStore.CreateUser(ctx, "user@example.com", true)
+	token, _ := d.sessions.Create(ctx, user.ID, time.Hour)
+
+	req := withSessionCookie(httptest.NewRequest(http.MethodGet, "/api/admin/saml-configs", nil), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for a non-admin, got %d", rec.Code)
+	}
+}
+
+func TestHandleUpdateSAMLConfig_UnknownIDIsNotFound(t *testing.T) {
+	d := newTestServer()
+	token := loginAsAdmin(t, d)
+
+	body, _ := json.Marshal(validSAMLConfigRequest(t))
+	req := withSessionCookie(httptest.NewRequest(http.MethodPatch, "/api/admin/saml-configs/"+uuid.New().String(), bytes.NewReader(body)), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for an unknown saml config id, got %d", rec.Code)
+	}
+}
+
+func TestHandleUpdateSAMLConfig_Success(t *testing.T) {
+	d := newTestServer()
+	token := loginAsAdmin(t, d)
+	ctx := context.Background()
+
+	created, err := d.server.samlConfigs.Create(ctx, validSAMLConfigRequest(t).toInput())
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+
+	update := validSAMLConfigRequest(t)
+	update.Name = "更新後のIdP名"
+	update.Enabled = false
+	body, _ := json.Marshal(update)
+	req := withSessionCookie(httptest.NewRequest(http.MethodPatch, "/api/admin/saml-configs/"+created.ID.String(), bytes.NewReader(body)), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp samlConfigResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Name != "更新後のIdP名" || resp.Enabled {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+}
+
+func TestHandleDeleteSAMLConfig_RefusedWhenInUse(t *testing.T) {
+	d := newTestServer()
+	token := loginAsAdmin(t, d)
+	ctx := context.Background()
+
+	created, err := d.server.samlConfigs.Create(ctx, validSAMLConfigRequest(t).toInput())
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+	d.samlConfigs.identCount[created.ID] = 1
+
+	req := withSessionCookie(httptest.NewRequest(http.MethodDelete, "/api/admin/saml-configs/"+created.ID.String(), nil), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409 refusing to delete a config still in use, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if _, ok := d.samlConfigs.configs[created.ID]; !ok {
+		t.Fatalf("expected the config to remain after a refused delete")
+	}
+}
+
+func TestHandleDeleteSAMLConfig_Success(t *testing.T) {
+	d := newTestServer()
+	token := loginAsAdmin(t, d)
+	ctx := context.Background()
+
+	created, err := d.server.samlConfigs.Create(ctx, validSAMLConfigRequest(t).toInput())
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+
+	req := withSessionCookie(httptest.NewRequest(http.MethodDelete, "/api/admin/saml-configs/"+created.ID.String(), nil), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if _, ok := d.samlConfigs.configs[created.ID]; ok {
+		t.Fatalf("expected the config to be removed")
+	}
+
+	found := false
+	for _, entry := range d.authStore.audit {
+		if entry.Action == "admin.saml_config_deleted" && entry.TargetID == created.ID.String() {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected an admin.saml_config_deleted audit entry, got %+v", d.authStore.audit)
 	}
 }

@@ -84,6 +84,7 @@ func main() {
 	shortURLStore := storage.NewShortURLStore(pool)
 	authSettingsStore := storage.NewAuthSettingsStore(pool)
 	signupVerificationStore := storage.NewLocalSignupVerificationStore(pool)
+	samlConfigStore := storage.NewSAMLConfigStore(pool)
 
 	domainStore := storage.NewRedirectStore(pool) // FindDefaultDomain is shared with cmd/redirect
 	domainID, err := domainStore.FindDefaultDomain(ctx)
@@ -121,6 +122,7 @@ func main() {
 		shortURLs:    &shorturl.Service{Store: shortURLStore},
 		shortURLGet:  shortURLStore,
 		cache:        shortURLCache,
+		samlConfigs:  &auth.SAMLConfigService{Store: samlConfigStore},
 
 		domainID: domainID,
 

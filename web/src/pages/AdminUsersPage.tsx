@@ -45,6 +45,12 @@ export function AdminUsersPage() {
 						認証設定
 					</Link>
 					<span className="font-medium text-indigo-600">ユーザー管理</span>
+					<Link
+						to="/admin/saml"
+						className="text-gray-600 hover:underline dark:text-gray-300"
+					>
+						SAML設定
+					</Link>
 				</nav>
 				{query.isLoading && <p>読み込み中…</p>}
 				{query.isError && (

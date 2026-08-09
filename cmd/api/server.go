@@ -52,6 +52,7 @@ type server struct {
 	shortURLs    *shorturl.Service
 	shortURLGet  shorturl.Store
 	cache        shortURLCacheInvalidator
+	samlConfigs  *auth.SAMLConfigService
 
 	domainID uuid.UUID
 
@@ -101,10 +102,15 @@ func (s *server) routes() http.Handler {
 				r.Patch("/auth-settings", s.handlePatchAuthSettings)
 				r.Get("/users", s.handleListUsers)
 				r.Patch("/users/{id}", s.handlePatchUser)
+
+				r.Get("/saml-configs", s.handleListSAMLConfigs)
+				r.Post("/saml-configs", s.handleCreateSAMLConfig)
+				r.Patch("/saml-configs/{id}", s.handleUpdateSAMLConfig)
+				r.Delete("/saml-configs/{id}", s.handleDeleteSAMLConfig)
 			})
 		})
 	})
 
-	// TODO: SAML/OIDC/WebAuthn, システム設定・ユーザー管理API、統計API。
+	// TODO: SAMLログインフロー(/auth/saml/{id}/login, /acs)、OIDC、WebAuthn、統計API。
 	return r
 }

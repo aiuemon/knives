@@ -1,6 +1,7 @@
 import { Route, Routes } from "react-router-dom";
 import { AdminRoute } from "./components/AdminRoute";
 import { ProtectedRoute } from "./components/ProtectedRoute";
+import { AdminSAMLConfigsPage } from "./pages/AdminSAMLConfigsPage";
 import { AdminSettingsPage } from "./pages/AdminSettingsPage";
 import { AdminUsersPage } from "./pages/AdminUsersPage";
 import { ConfirmLinkPage } from "./pages/ConfirmLinkPage";
@@ -46,6 +47,14 @@ function App() {
 				element={
 					<AdminRoute>
 						<AdminUsersPage />
+					</AdminRoute>
+				}
+			/>
+			<Route
+				path="/admin/saml"
+				element={
+					<AdminRoute>
+						<AdminSAMLConfigsPage />
 					</AdminRoute>
 				}
 			/>

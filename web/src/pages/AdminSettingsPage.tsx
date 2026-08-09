@@ -47,6 +47,12 @@ export function AdminSettingsPage() {
 					>
 						ユーザー管理
 					</Link>
+					<Link
+						to="/admin/saml"
+						className="text-gray-600 hover:underline dark:text-gray-300"
+					>
+						SAML設定
+					</Link>
 				</nav>
 				{query.isLoading && <p>読み込み中…</p>}
 				{query.isError && (
