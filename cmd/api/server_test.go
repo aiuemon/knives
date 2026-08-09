@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"testing"
 	"time"
 
@@ -68,6 +69,7 @@ func (f *fakeSessions) DeleteAllForUser(_ context.Context, userID uuid.UUID) err
 type fakeAuthStore struct {
 	users       map[uuid.UUID]*auth.User
 	usersByMail map[string]uuid.UUID
+	adminUsers  map[uuid.UUID]*auth.AdminUser
 	identities  map[string]*auth.AuthIdentity
 	identCount  map[uuid.UUID]int
 	pending     map[string]*auth.PendingLinkRequest
@@ -78,6 +80,7 @@ func newFakeAuthStore() *fakeAuthStore {
 	return &fakeAuthStore{
 		users:       map[uuid.UUID]*auth.User{},
 		usersByMail: map[string]uuid.UUID{},
+		adminUsers:  map[uuid.UUID]*auth.AdminUser{},
 		identities:  map[string]*auth.AuthIdentity{},
 		identCount:  map[uuid.UUID]int{},
 		pending:     map[string]*auth.PendingLinkRequest{},
@@ -123,7 +126,57 @@ func (s *fakeAuthStore) CreateUser(_ context.Context, email string, emailVerifie
 	u := &auth.User{ID: uuid.New(), Email: email, EmailVerified: emailVerified}
 	s.users[u.ID] = u
 	s.usersByMail[email] = u.ID
+	s.adminUsers[u.ID] = &auth.AdminUser{
+		ID:            u.ID,
+		Email:         email,
+		EmailVerified: emailVerified,
+		Status:        auth.UserStatusActive,
+		CreatedAt:     time.Now(),
+	}
 	return u, nil
+}
+
+func (s *fakeAuthStore) ListUsers(_ context.Context, limit, offset int) ([]*auth.AdminUser, error) {
+	result := make([]*auth.AdminUser, 0, len(s.adminUsers))
+	for _, u := range s.adminUsers {
+		result = append(result, u)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt.After(result[j].CreatedAt) })
+	if offset >= len(result) {
+		return nil, nil
+	}
+	end := len(result)
+	if limit > 0 && offset+limit < end {
+		end = offset + limit
+	}
+	return result[offset:end], nil
+}
+
+func (s *fakeAuthStore) FindAdminUserByID(_ context.Context, id uuid.UUID) (*auth.AdminUser, error) {
+	u, ok := s.adminUsers[id]
+	if !ok {
+		return nil, auth.ErrNotFound
+	}
+	cp := *u
+	return &cp, nil
+}
+
+func (s *fakeAuthStore) SetSystemAdmin(_ context.Context, id uuid.UUID, isAdmin bool) error {
+	u, ok := s.adminUsers[id]
+	if !ok {
+		return auth.ErrNotFound
+	}
+	u.IsSystemAdmin = isAdmin
+	return nil
+}
+
+func (s *fakeAuthStore) SetUserStatus(_ context.Context, id uuid.UUID, status auth.UserStatus) error {
+	u, ok := s.adminUsers[id]
+	if !ok {
+		return auth.ErrNotFound
+	}
+	u.Status = status
+	return nil
 }
 
 func (s *fakeAuthStore) CreateAuthIdentity(_ context.Context, userID uuid.UUID, providerType auth.ProviderType, providerConfigID *uuid.UUID, subject, emailAtLink string, _ bool) (*auth.AuthIdentity, error) {
@@ -467,6 +520,14 @@ func (f *fakeAuthSettings) FindAuthSettings(context.Context) (bool, bool, bool, 
 // same fake can back both server.authSettings and server.resolver.AuthSettings.
 func (f *fakeAuthSettings) RequireReauthForAccountLink(context.Context) (bool, error) {
 	return f.requireReauthForAccountLink, nil
+}
+
+func (f *fakeAuthSettings) UpdateAuthSettings(_ context.Context, localAuthEnabled, selfSignupEnabled, requireConfirmation, requireReauthForAccountLink bool) error {
+	f.localAuthEnabled = localAuthEnabled
+	f.selfSignupEnabled = selfSignupEnabled
+	f.requireConfirmation = requireConfirmation
+	f.requireReauthForAccountLink = requireReauthForAccountLink
+	return nil
 }
 
 // --- test harness --------------------------------------------------------
@@ -1085,5 +1146,273 @@ func TestHandleRevokeURLPermission_EditorCanBeRevoked(t *testing.T) {
 	}
 	if d.permissions.grants[grantKey(created.ID, editor.ID)] != nil {
 		t.Fatalf("expected the editor's grant to be removed")
+	}
+}
+
+// --- admin handler tests ----------------------------------------------------
+
+func TestRequireSystemAdmin_RejectsNonAdmin(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	user, _ := d.authStore.CreateUser(ctx, "user@example.com", true)
+	token, _ := d.sessions.Create(ctx, user.ID, time.Hour)
+
+	req := withSessionCookie(httptest.NewRequest(http.MethodGet, "/api/admin/users", nil), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for a non-admin hitting an admin route, got %d", rec.Code)
+	}
+}
+
+func TestRequireSystemAdmin_RejectsUnauthenticated(t *testing.T) {
+	d := newTestServer()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/users", nil)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without a session, got %d", rec.Code)
+	}
+}
+
+func TestHandleGetAuthSettings_AdminCanRead(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	admin, _ := d.authStore.CreateUser(ctx, "admin@example.com", true)
+	d.permissions.admins[admin.ID] = true
+	token, _ := d.sessions.Create(ctx, admin.ID, time.Hour)
+
+	req := withSessionCookie(httptest.NewRequest(http.MethodGet, "/api/admin/auth-settings", nil), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp authSettingsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.LocalAuthEnabled != d.authSettings.localAuthEnabled || resp.SelfSignupEnabled != d.authSettings.selfSignupEnabled {
+		t.Fatalf("unexpected settings: %+v", resp)
+	}
+}
+
+func TestHandlePatchAuthSettings_MergesOnlyGivenFields(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	admin, _ := d.authStore.CreateUser(ctx, "admin@example.com", true)
+	d.permissions.admins[admin.ID] = true
+	token, _ := d.sessions.Create(ctx, admin.ID, time.Hour)
+
+	originalSelfSignup := d.authSettings.selfSignupEnabled
+	disableLocalAuth := false
+	body, _ := json.Marshal(patchAuthSettingsRequest{LocalAuthEnabled: &disableLocalAuth})
+	req := withSessionCookie(httptest.NewRequest(http.MethodPatch, "/api/admin/auth-settings", bytes.NewReader(body)), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp authSettingsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.LocalAuthEnabled != false {
+		t.Fatalf("expected local_auth_enabled to be updated to false, got %+v", resp)
+	}
+	if resp.SelfSignupEnabled != originalSelfSignup {
+		t.Fatalf("expected self_signup_enabled to stay unchanged at %v, got %v (PATCH must not clobber unset fields)", originalSelfSignup, resp.SelfSignupEnabled)
+	}
+
+	found := false
+	for _, entry := range d.authStore.audit {
+		if entry.Action == "admin.auth_settings_updated" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected an admin.auth_settings_updated audit entry, got %+v", d.authStore.audit)
+	}
+}
+
+func TestHandleListUsers_AdminSeesAllUsers(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	admin, _ := d.authStore.CreateUser(ctx, "admin@example.com", true)
+	d.permissions.admins[admin.ID] = true
+	token, _ := d.sessions.Create(ctx, admin.ID, time.Hour)
+	if _, err := d.authStore.CreateUser(ctx, "other@example.com", true); err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+
+	req := withSessionCookie(httptest.NewRequest(http.MethodGet, "/api/admin/users", nil), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp []adminUserResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp) != 2 {
+		t.Fatalf("expected 2 users (admin+other), got %+v", resp)
+	}
+}
+
+func TestHandlePatchUser_GrantSystemAdmin(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	admin, _ := d.authStore.CreateUser(ctx, "admin@example.com", true)
+	d.permissions.admins[admin.ID] = true
+	token, _ := d.sessions.Create(ctx, admin.ID, time.Hour)
+
+	target, _ := d.authStore.CreateUser(ctx, "target@example.com", true)
+
+	grantAdmin := true
+	body, _ := json.Marshal(patchUserRequest{IsSystemAdmin: &grantAdmin})
+	req := withSessionCookie(httptest.NewRequest(http.MethodPatch, "/api/admin/users/"+target.ID.String(), bytes.NewReader(body)), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp adminUserResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.IsSystemAdmin {
+		t.Fatalf("expected is_system_admin=true, got %+v", resp)
+	}
+	if !d.authStore.adminUsers[target.ID].IsSystemAdmin {
+		t.Fatalf("expected the store's admin user record to reflect the grant")
+	}
+
+	var granted bool
+	for _, entry := range d.authStore.audit {
+		if entry.Action == "admin.system_admin_granted" && entry.TargetID == target.ID.String() {
+			granted = true
+		}
+	}
+	if !granted {
+		t.Fatalf("expected an admin.system_admin_granted audit entry, got %+v", d.authStore.audit)
+	}
+}
+
+func TestHandlePatchUser_CannotRevokeOwnSystemAdmin(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	admin, _ := d.authStore.CreateUser(ctx, "admin@example.com", true)
+	d.permissions.admins[admin.ID] = true
+	token, _ := d.sessions.Create(ctx, admin.ID, time.Hour)
+
+	revokeAdmin := false
+	body, _ := json.Marshal(patchUserRequest{IsSystemAdmin: &revokeAdmin})
+	req := withSessionCookie(httptest.NewRequest(http.MethodPatch, "/api/admin/users/"+admin.ID.String(), bytes.NewReader(body)), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409 refusing self-lockout, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandlePatchUser_CannotSuspendSelf(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	admin, _ := d.authStore.CreateUser(ctx, "admin@example.com", true)
+	d.permissions.admins[admin.ID] = true
+	token, _ := d.sessions.Create(ctx, admin.ID, time.Hour)
+
+	suspended := "suspended"
+	body, _ := json.Marshal(patchUserRequest{Status: &suspended})
+	req := withSessionCookie(httptest.NewRequest(http.MethodPatch, "/api/admin/users/"+admin.ID.String(), bytes.NewReader(body)), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409 refusing to suspend self, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandlePatchUser_SuspendAnotherUser(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	admin, _ := d.authStore.CreateUser(ctx, "admin@example.com", true)
+	d.permissions.admins[admin.ID] = true
+	token, _ := d.sessions.Create(ctx, admin.ID, time.Hour)
+
+	target, _ := d.authStore.CreateUser(ctx, "target@example.com", true)
+
+	suspended := "suspended"
+	body, _ := json.Marshal(patchUserRequest{Status: &suspended})
+	req := withSessionCookie(httptest.NewRequest(http.MethodPatch, "/api/admin/users/"+target.ID.String(), bytes.NewReader(body)), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp adminUserResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Status != "suspended" {
+		t.Fatalf("expected status=suspended, got %+v", resp)
+	}
+}
+
+func TestHandlePatchUser_InvalidStatusRejected(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	admin, _ := d.authStore.CreateUser(ctx, "admin@example.com", true)
+	d.permissions.admins[admin.ID] = true
+	token, _ := d.sessions.Create(ctx, admin.ID, time.Hour)
+
+	target, _ := d.authStore.CreateUser(ctx, "target@example.com", true)
+
+	bogus := "banned"
+	body, _ := json.Marshal(patchUserRequest{Status: &bogus})
+	req := withSessionCookie(httptest.NewRequest(http.MethodPatch, "/api/admin/users/"+target.ID.String(), bytes.NewReader(body)), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for an invalid status value, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandlePatchUser_UnknownUserIsNotFound(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	admin, _ := d.authStore.CreateUser(ctx, "admin@example.com", true)
+	d.permissions.admins[admin.ID] = true
+	token, _ := d.sessions.Create(ctx, admin.ID, time.Hour)
+
+	grantAdmin := true
+	body, _ := json.Marshal(patchUserRequest{IsSystemAdmin: &grantAdmin})
+	req := withSessionCookie(httptest.NewRequest(http.MethodPatch, "/api/admin/users/"+uuid.New().String(), bytes.NewReader(body)), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for an unknown user id, got %d", rec.Code)
 	}
 }

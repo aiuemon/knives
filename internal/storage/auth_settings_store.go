@@ -31,3 +31,15 @@ func (s *AuthSettingsStore) RequireReauthForAccountLink(ctx context.Context) (bo
 	_, _, _, requireReauth, err := s.FindAuthSettings(ctx)
 	return requireReauth, err
 }
+
+// UpdateAuthSettings replaces the single settings row wholesale (4節: 認証設定
+// の変更はsystem_admin限定). Callers must merge onto the current values
+// themselves for partial (PATCH-style) updates.
+func (s *AuthSettingsStore) UpdateAuthSettings(ctx context.Context, localAuthEnabled, selfSignupEnabled, requireEmailConfirmation, requireReauthForAccountLink bool) error {
+	return s.Q.UpdateAuthSettings(ctx, UpdateAuthSettingsParams{
+		LocalAuthEnabled:                  localAuthEnabled,
+		SelfSignupEnabled:                 selfSignupEnabled,
+		RequireEmailConfirmationForSignup: requireEmailConfirmation,
+		RequireReauthForAccountLink:       requireReauthForAccountLink,
+	})
+}

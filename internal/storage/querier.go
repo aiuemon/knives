@@ -20,6 +20,7 @@ type Querier interface {
 	CreateUser(ctx context.Context, arg CreateUserParams) (*CreateUserRow, error)
 	DeleteLocalSignupVerification(ctx context.Context, id uuid.UUID) error
 	DeleteURLPermission(ctx context.Context, arg DeleteURLPermissionParams) error
+	FindAdminUserByID(ctx context.Context, id uuid.UUID) (*FindAdminUserByIDRow, error)
 	FindAuthIdentity(ctx context.Context, arg FindAuthIdentityParams) (*FindAuthIdentityRow, error)
 	FindAuthSettings(ctx context.Context) (*FindAuthSettingsRow, error)
 	FindDefaultDomain(ctx context.Context) (uuid.UUID, error)
@@ -40,11 +41,15 @@ type Querier interface {
 	ListAllShortURLs(ctx context.Context, arg ListAllShortURLsParams) ([]*ShortUrl, error)
 	ListShortURLsForUser(ctx context.Context, arg ListShortURLsForUserParams) ([]*ShortUrl, error)
 	ListURLPermissions(ctx context.Context, shortUrlID uuid.UUID) ([]*ListURLPermissionsRow, error)
+	ListUsers(ctx context.Context, arg ListUsersParams) ([]*ListUsersRow, error)
 	RecordAuditLog(ctx context.Context, arg RecordAuditLogParams) error
 	RecordFailedLoginAttempt(ctx context.Context, arg RecordFailedLoginAttemptParams) error
 	ResetFailedLoginAttempts(ctx context.Context, userID uuid.UUID) error
 	SetShortURLStatus(ctx context.Context, arg SetShortURLStatusParams) error
+	SetSystemAdmin(ctx context.Context, arg SetSystemAdminParams) (int64, error)
+	SetUserStatus(ctx context.Context, arg SetUserStatusParams) (int64, error)
 	TouchAuthIdentity(ctx context.Context, arg TouchAuthIdentityParams) error
+	UpdateAuthSettings(ctx context.Context, arg UpdateAuthSettingsParams) error
 	UpdateShortURLFields(ctx context.Context, arg UpdateShortURLFieldsParams) (*ShortUrl, error)
 	UpsertLocalCredentialPassword(ctx context.Context, arg UpsertLocalCredentialPasswordParams) error
 	UpsertURLPermission(ctx context.Context, arg UpsertURLPermissionParams) error

@@ -33,3 +33,29 @@ func (q *Queries) FindAuthSettings(ctx context.Context) (*FindAuthSettingsRow, e
 	)
 	return &i, err
 }
+
+const updateAuthSettings = `-- name: UpdateAuthSettings :exec
+UPDATE auth_settings
+SET local_auth_enabled = $1,
+    self_signup_enabled = $2,
+    require_email_confirmation_for_signup = $3,
+    require_reauth_for_account_link = $4
+WHERE id
+`
+
+type UpdateAuthSettingsParams struct {
+	LocalAuthEnabled                  bool `json:"local_auth_enabled"`
+	SelfSignupEnabled                 bool `json:"self_signup_enabled"`
+	RequireEmailConfirmationForSignup bool `json:"require_email_confirmation_for_signup"`
+	RequireReauthForAccountLink       bool `json:"require_reauth_for_account_link"`
+}
+
+func (q *Queries) UpdateAuthSettings(ctx context.Context, arg UpdateAuthSettingsParams) error {
+	_, err := q.db.Exec(ctx, updateAuthSettings,
+		arg.LocalAuthEnabled,
+		arg.SelfSignupEnabled,
+		arg.RequireEmailConfirmationForSignup,
+		arg.RequireReauthForAccountLink,
+	)
+	return err
+}

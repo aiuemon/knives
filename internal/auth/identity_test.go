@@ -130,6 +130,36 @@ func (s *fakeStore) ConfirmPendingLinkRequest(_ context.Context, id uuid.UUID, a
 	return ErrNotFound
 }
 
+func (s *fakeStore) ListUsers(_ context.Context, _, _ int) ([]*AdminUser, error) {
+	result := make([]*AdminUser, 0, len(s.users))
+	for _, u := range s.users {
+		result = append(result, &AdminUser{ID: u.ID, Email: u.Email, EmailVerified: u.EmailVerified, Status: UserStatusActive})
+	}
+	return result, nil
+}
+
+func (s *fakeStore) FindAdminUserByID(_ context.Context, id uuid.UUID) (*AdminUser, error) {
+	u, ok := s.users[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return &AdminUser{ID: u.ID, Email: u.Email, EmailVerified: u.EmailVerified, Status: UserStatusActive}, nil
+}
+
+func (s *fakeStore) SetSystemAdmin(_ context.Context, id uuid.UUID, _ bool) error {
+	if _, ok := s.users[id]; !ok {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *fakeStore) SetUserStatus(_ context.Context, id uuid.UUID, _ UserStatus) error {
+	if _, ok := s.users[id]; !ok {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *fakeStore) RecordAuditLog(_ context.Context, entry AuditLogEntry) error {
 	s.audit = append(s.audit, entry)
 	return nil

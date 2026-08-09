@@ -67,6 +67,25 @@ func (s *server) requireAuth(next http.Handler) http.Handler {
 	})
 }
 
+// requireSystemAdmin gates the /api/admin/* routes. Unlike resolveAccess's
+// 404-not-403 handling for a specific short URL's existence, these endpoints
+// aren't secret — everyone knows /api/admin/users exists — so a plain 403
+// is the right signal here, not a concealment 404.
+func (s *server) requireSystemAdmin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		subject, ok := subjectFromContext(r.Context())
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if !subject.IsSystemAdmin {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (s *server) setSessionCookie(w http.ResponseWriter, token string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     s.sessionCookieName,

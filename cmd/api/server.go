@@ -28,9 +28,10 @@ type permissionChecker interface {
 }
 
 // authSettingsChecker is the subset of storage.AuthSettingsStore the signup
-// handler needs.
+// and admin-settings handlers need.
 type authSettingsChecker interface {
 	FindAuthSettings(ctx context.Context) (localAuthEnabled, selfSignupEnabled, requireEmailConfirmation, requireReauthForAccountLink bool, err error)
+	UpdateAuthSettings(ctx context.Context, localAuthEnabled, selfSignupEnabled, requireEmailConfirmation, requireReauthForAccountLink bool) error
 }
 
 // shortURLCacheInvalidator is the subset of *cache.Cache the API needs:
@@ -93,6 +94,14 @@ func (s *server) routes() http.Handler {
 			r.Get("/short-urls/{id}/permissions", s.handleListURLPermissions)
 			r.Post("/short-urls/{id}/permissions", s.handleGrantURLPermission)
 			r.Delete("/short-urls/{id}/permissions/{userId}", s.handleRevokeURLPermission)
+
+			r.Route("/admin", func(r chi.Router) {
+				r.Use(s.requireSystemAdmin)
+				r.Get("/auth-settings", s.handleGetAuthSettings)
+				r.Patch("/auth-settings", s.handlePatchAuthSettings)
+				r.Get("/users", s.handleListUsers)
+				r.Patch("/users/{id}", s.handlePatchUser)
+			})
 		})
 	})
 

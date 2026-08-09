@@ -38,6 +38,26 @@ type User struct {
 	EmailVerified bool
 }
 
+// UserStatus mirrors the users.status enum (2節).
+type UserStatus string
+
+const (
+	UserStatusActive    UserStatus = "active"
+	UserStatusSuspended UserStatus = "suspended"
+)
+
+// AdminUser is the user-management view exposed to system_admin (4節): richer
+// than User (the identity-resolution type) since admins need role/status/
+// join-date, not just enough to resolve a login.
+type AdminUser struct {
+	ID            uuid.UUID
+	Email         string
+	EmailVerified bool
+	IsSystemAdmin bool
+	Status        UserStatus
+	CreatedAt     time.Time
+}
+
 type AuthIdentity struct {
 	ID          uuid.UUID
 	UserID      uuid.UUID
@@ -112,6 +132,20 @@ type Store interface {
 	FindPendingLinkRequestsForUser(ctx context.Context, userID uuid.UUID) ([]*PendingLinkRequest, error)
 	ConfirmPendingLinkRequest(ctx context.Context, id uuid.UUID, at time.Time) error
 	RecordAuditLog(ctx context.Context, entry AuditLogEntry) error
+
+	// ListUsers returns every user, newest first, for system_admin's user
+	// management screen (4節).
+	ListUsers(ctx context.Context, limit, offset int) ([]*AdminUser, error)
+	// FindAdminUserByID returns ErrNotFound if no such user exists.
+	FindAdminUserByID(ctx context.Context, id uuid.UUID) (*AdminUser, error)
+	// SetSystemAdmin grants or revokes system_admin on userID. Returns
+	// ErrNotFound if userID doesn't exist. Preventing an admin from
+	// revoking their own admin status (self-lockout) is the caller's
+	// responsibility — this method doesn't know who "self" is.
+	SetSystemAdmin(ctx context.Context, userID uuid.UUID, isAdmin bool) error
+	// SetUserStatus changes users.status. Returns ErrNotFound if userID
+	// doesn't exist.
+	SetUserStatus(ctx context.Context, userID uuid.UUID, status UserStatus) error
 }
 
 // AuthSettingsProvider lets Resolver check the admin-configurable

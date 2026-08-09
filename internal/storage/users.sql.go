@@ -9,6 +9,7 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const createUser = `-- name: CreateUser :one
@@ -32,6 +33,35 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (*Create
 	row := q.db.QueryRow(ctx, createUser, arg.Email, arg.EmailVerified)
 	var i CreateUserRow
 	err := row.Scan(&i.ID, &i.Email, &i.EmailVerified)
+	return &i, err
+}
+
+const findAdminUserByID = `-- name: FindAdminUserByID :one
+SELECT id, email, email_verified, is_system_admin, status, created_at
+FROM users
+WHERE id = $1
+`
+
+type FindAdminUserByIDRow struct {
+	ID            uuid.UUID          `json:"id"`
+	Email         string             `json:"email"`
+	EmailVerified bool               `json:"email_verified"`
+	IsSystemAdmin bool               `json:"is_system_admin"`
+	Status        UserStatus         `json:"status"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) FindAdminUserByID(ctx context.Context, id uuid.UUID) (*FindAdminUserByIDRow, error) {
+	row := q.db.QueryRow(ctx, findAdminUserByID, id)
+	var i FindAdminUserByIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.EmailVerified,
+		&i.IsSystemAdmin,
+		&i.Status,
+		&i.CreatedAt,
+	)
 	return &i, err
 }
 
@@ -84,4 +114,90 @@ func (q *Queries) FindUserByID(ctx context.Context, id uuid.UUID) (*FindUserByID
 	var i FindUserByIDRow
 	err := row.Scan(&i.ID, &i.Email, &i.EmailVerified)
 	return &i, err
+}
+
+const listUsers = `-- name: ListUsers :many
+SELECT id, email, email_verified, is_system_admin, status, created_at
+FROM users
+ORDER BY created_at DESC
+LIMIT $1 OFFSET $2
+`
+
+type ListUsersParams struct {
+	Limit  int32 `json:"limit"`
+	Offset int32 `json:"offset"`
+}
+
+type ListUsersRow struct {
+	ID            uuid.UUID          `json:"id"`
+	Email         string             `json:"email"`
+	EmailVerified bool               `json:"email_verified"`
+	IsSystemAdmin bool               `json:"is_system_admin"`
+	Status        UserStatus         `json:"status"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) ListUsers(ctx context.Context, arg ListUsersParams) ([]*ListUsersRow, error) {
+	rows, err := q.db.Query(ctx, listUsers, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*ListUsersRow
+	for rows.Next() {
+		var i ListUsersRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Email,
+			&i.EmailVerified,
+			&i.IsSystemAdmin,
+			&i.Status,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const setSystemAdmin = `-- name: SetSystemAdmin :execrows
+UPDATE users
+SET is_system_admin = $2, updated_at = now()
+WHERE id = $1
+`
+
+type SetSystemAdminParams struct {
+	ID            uuid.UUID `json:"id"`
+	IsSystemAdmin bool      `json:"is_system_admin"`
+}
+
+func (q *Queries) SetSystemAdmin(ctx context.Context, arg SetSystemAdminParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setSystemAdmin, arg.ID, arg.IsSystemAdmin)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setUserStatus = `-- name: SetUserStatus :execrows
+UPDATE users
+SET status = $2, updated_at = now()
+WHERE id = $1
+`
+
+type SetUserStatusParams struct {
+	ID     uuid.UUID  `json:"id"`
+	Status UserStatus `json:"status"`
+}
+
+func (q *Queries) SetUserStatus(ctx context.Context, arg SetUserStatusParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setUserStatus, arg.ID, arg.Status)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

@@ -164,6 +164,62 @@ func (s *AuthStore) ConfirmPendingLinkRequest(ctx context.Context, id uuid.UUID,
 	return s.Q.ConfirmPendingLinkRequest(ctx, ConfirmPendingLinkRequestParams{ID: id, ConfirmedAt: toTimestamptz(at)})
 }
 
+func (s *AuthStore) ListUsers(ctx context.Context, limit, offset int) ([]*auth.AdminUser, error) {
+	rows, err := s.Q.ListUsers(ctx, ListUsersParams{Limit: int32(limit), Offset: int32(offset)})
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*auth.AdminUser, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, &auth.AdminUser{
+			ID:            row.ID,
+			Email:         row.Email,
+			EmailVerified: row.EmailVerified,
+			IsSystemAdmin: row.IsSystemAdmin,
+			Status:        auth.UserStatus(row.Status),
+			CreatedAt:     row.CreatedAt.Time,
+		})
+	}
+	return result, nil
+}
+
+func (s *AuthStore) FindAdminUserByID(ctx context.Context, id uuid.UUID) (*auth.AdminUser, error) {
+	row, err := s.Q.FindAdminUserByID(ctx, id)
+	if err != nil {
+		return nil, mapNotFound(err)
+	}
+	return &auth.AdminUser{
+		ID:            row.ID,
+		Email:         row.Email,
+		EmailVerified: row.EmailVerified,
+		IsSystemAdmin: row.IsSystemAdmin,
+		Status:        auth.UserStatus(row.Status),
+		CreatedAt:     row.CreatedAt.Time,
+	}, nil
+}
+
+func (s *AuthStore) SetSystemAdmin(ctx context.Context, userID uuid.UUID, isAdmin bool) error {
+	rowsAffected, err := s.Q.SetSystemAdmin(ctx, SetSystemAdminParams{ID: userID, IsSystemAdmin: isAdmin})
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return auth.ErrNotFound
+	}
+	return nil
+}
+
+func (s *AuthStore) SetUserStatus(ctx context.Context, userID uuid.UUID, status auth.UserStatus) error {
+	rowsAffected, err := s.Q.SetUserStatus(ctx, SetUserStatusParams{ID: userID, Status: UserStatus(status)})
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return auth.ErrNotFound
+	}
+	return nil
+}
+
 func (s *AuthStore) RecordAuditLog(ctx context.Context, entry auth.AuditLogEntry) error {
 	metadata, err := json.Marshal(entry.Metadata)
 	if err != nil {
