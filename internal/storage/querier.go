@@ -13,11 +13,13 @@ import (
 type Querier interface {
 	ConfirmPendingLinkRequest(ctx context.Context, arg ConfirmPendingLinkRequestParams) error
 	CountAuthIdentitiesForUser(ctx context.Context, userID uuid.UUID) (int64, error)
+	CountURLOwners(ctx context.Context, shortUrlID uuid.UUID) (int64, error)
 	CreateAuthIdentity(ctx context.Context, arg CreateAuthIdentityParams) (*CreateAuthIdentityRow, error)
 	CreateLocalSignupVerification(ctx context.Context, arg CreateLocalSignupVerificationParams) (uuid.UUID, error)
 	CreatePendingLinkRequest(ctx context.Context, arg CreatePendingLinkRequestParams) (uuid.UUID, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (*CreateUserRow, error)
 	DeleteLocalSignupVerification(ctx context.Context, id uuid.UUID) error
+	DeleteURLPermission(ctx context.Context, arg DeleteURLPermissionParams) error
 	FindAuthIdentity(ctx context.Context, arg FindAuthIdentityParams) (*FindAuthIdentityRow, error)
 	FindAuthSettings(ctx context.Context) (*FindAuthSettingsRow, error)
 	FindDefaultDomain(ctx context.Context) (uuid.UUID, error)
@@ -35,11 +37,17 @@ type Querier interface {
 	FindUserByID(ctx context.Context, id uuid.UUID) (*FindUserByIDRow, error)
 	InsertShortURL(ctx context.Context, arg InsertShortURLParams) (uuid.UUID, error)
 	InsertURLPermission(ctx context.Context, arg InsertURLPermissionParams) error
+	ListAllShortURLs(ctx context.Context, arg ListAllShortURLsParams) ([]*ShortUrl, error)
+	ListShortURLsForUser(ctx context.Context, arg ListShortURLsForUserParams) ([]*ShortUrl, error)
+	ListURLPermissions(ctx context.Context, shortUrlID uuid.UUID) ([]*ListURLPermissionsRow, error)
 	RecordAuditLog(ctx context.Context, arg RecordAuditLogParams) error
 	RecordFailedLoginAttempt(ctx context.Context, arg RecordFailedLoginAttemptParams) error
 	ResetFailedLoginAttempts(ctx context.Context, userID uuid.UUID) error
+	SetShortURLStatus(ctx context.Context, arg SetShortURLStatusParams) error
 	TouchAuthIdentity(ctx context.Context, arg TouchAuthIdentityParams) error
+	UpdateShortURLFields(ctx context.Context, arg UpdateShortURLFieldsParams) (*ShortUrl, error)
 	UpsertLocalCredentialPassword(ctx context.Context, arg UpsertLocalCredentialPasswordParams) error
+	UpsertURLPermission(ctx context.Context, arg UpsertURLPermissionParams) error
 }
 
 var _ Querier = (*Queries)(nil)

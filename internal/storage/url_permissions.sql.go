@@ -9,7 +9,36 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
+
+const countURLOwners = `-- name: CountURLOwners :one
+SELECT count(*)
+FROM url_permissions
+WHERE short_url_id = $1 AND role = 'owner'
+`
+
+func (q *Queries) CountURLOwners(ctx context.Context, shortUrlID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countURLOwners, shortUrlID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const deleteURLPermission = `-- name: DeleteURLPermission :exec
+DELETE FROM url_permissions
+WHERE short_url_id = $1 AND user_id = $2
+`
+
+type DeleteURLPermissionParams struct {
+	ShortUrlID uuid.UUID `json:"short_url_id"`
+	UserID     uuid.UUID `json:"user_id"`
+}
+
+func (q *Queries) DeleteURLPermission(ctx context.Context, arg DeleteURLPermissionParams) error {
+	_, err := q.db.Exec(ctx, deleteURLPermission, arg.ShortUrlID, arg.UserID)
+	return err
+}
 
 const findURLPermission = `-- name: FindURLPermission :one
 SELECT role
@@ -43,6 +72,70 @@ type InsertURLPermissionParams struct {
 
 func (q *Queries) InsertURLPermission(ctx context.Context, arg InsertURLPermissionParams) error {
 	_, err := q.db.Exec(ctx, insertURLPermission,
+		arg.ShortUrlID,
+		arg.UserID,
+		arg.Role,
+		arg.GrantedBy,
+	)
+	return err
+}
+
+const listURLPermissions = `-- name: ListURLPermissions :many
+SELECT up.user_id, up.role, u.email, up.granted_at
+FROM url_permissions up
+JOIN users u ON u.id = up.user_id
+WHERE up.short_url_id = $1
+ORDER BY up.granted_at ASC
+`
+
+type ListURLPermissionsRow struct {
+	UserID    uuid.UUID          `json:"user_id"`
+	Role      UrlPermissionRole  `json:"role"`
+	Email     string             `json:"email"`
+	GrantedAt pgtype.Timestamptz `json:"granted_at"`
+}
+
+func (q *Queries) ListURLPermissions(ctx context.Context, shortUrlID uuid.UUID) ([]*ListURLPermissionsRow, error) {
+	rows, err := q.db.Query(ctx, listURLPermissions, shortUrlID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*ListURLPermissionsRow
+	for rows.Next() {
+		var i ListURLPermissionsRow
+		if err := rows.Scan(
+			&i.UserID,
+			&i.Role,
+			&i.Email,
+			&i.GrantedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const upsertURLPermission = `-- name: UpsertURLPermission :exec
+INSERT INTO url_permissions (short_url_id, user_id, role, granted_by)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (short_url_id, user_id) DO UPDATE
+SET role = EXCLUDED.role, granted_by = EXCLUDED.granted_by, granted_at = now()
+`
+
+type UpsertURLPermissionParams struct {
+	ShortUrlID uuid.UUID         `json:"short_url_id"`
+	UserID     uuid.UUID         `json:"user_id"`
+	Role       UrlPermissionRole `json:"role"`
+	GrantedBy  uuid.UUID         `json:"granted_by"`
+}
+
+func (q *Queries) UpsertURLPermission(ctx context.Context, arg UpsertURLPermissionParams) error {
+	_, err := q.db.Exec(ctx, upsertURLPermission,
 		arg.ShortUrlID,
 		arg.UserID,
 		arg.Role,

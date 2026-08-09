@@ -12,6 +12,7 @@ import (
 	"github.com/aiuemon/knives/internal/auth"
 	"github.com/aiuemon/knives/internal/permission"
 	"github.com/aiuemon/knives/internal/shorturl"
+	"github.com/aiuemon/knives/internal/storage"
 )
 
 // permissionChecker is the subset of storage.PermissionStore the API
@@ -20,12 +21,23 @@ import (
 type permissionChecker interface {
 	FindGrant(ctx context.Context, shortURLID, userID uuid.UUID) (*permission.Grant, error)
 	IsSystemAdmin(ctx context.Context, userID uuid.UUID) (bool, error)
+	ListGrants(ctx context.Context, shortURLID uuid.UUID) ([]storage.GrantWithEmail, error)
+	CountOwners(ctx context.Context, shortURLID uuid.UUID) (int, error)
+	Grant(ctx context.Context, shortURLID, userID uuid.UUID, role permission.Role, grantedBy uuid.UUID) error
+	Revoke(ctx context.Context, shortURLID, userID uuid.UUID) error
 }
 
 // authSettingsChecker is the subset of storage.AuthSettingsStore the signup
 // handler needs.
 type authSettingsChecker interface {
 	FindAuthSettings(ctx context.Context) (localAuthEnabled, selfSignupEnabled, requireEmailConfirmation, requireReauthForAccountLink bool, err error)
+}
+
+// shortURLCacheInvalidator is the subset of *cache.Cache the API needs:
+// purge the redirect hot-path cache after an edit/disable so a stale
+// mapping doesn't outlive the edit (6節-2). *cache.Cache satisfies this.
+type shortURLCacheInvalidator interface {
+	Invalidate(ctx context.Context, key string) error
 }
 
 type server struct {
@@ -36,8 +48,9 @@ type server struct {
 	localSignup  *auth.LocalSignup
 	authSettings authSettingsChecker
 	permissions  permissionChecker
-	shortURLs    *shorturl.Creator
+	shortURLs    *shorturl.Service
 	shortURLGet  shorturl.Store
+	cache        shortURLCacheInvalidator
 
 	domainID uuid.UUID
 
@@ -70,11 +83,19 @@ func (s *server) routes() http.Handler {
 			r.Post("/auth/local/password", s.handleSetPassword)
 			r.Get("/auth/pending-links", s.handleListPendingLinks)
 			r.Post("/auth/pending-links/{id}/approve", s.handleApprovePendingLink)
+
+			r.Get("/short-urls", s.handleListShortURLs)
 			r.Post("/short-urls", s.handleCreateShortURL)
 			r.Get("/short-urls/{id}", s.handleGetShortURL)
+			r.Patch("/short-urls/{id}", s.handleUpdateShortURL)
+			r.Delete("/short-urls/{id}", s.handleDeleteShortURL)
+
+			r.Get("/short-urls/{id}/permissions", s.handleListURLPermissions)
+			r.Post("/short-urls/{id}/permissions", s.handleGrantURLPermission)
+			r.Delete("/short-urls/{id}/permissions/{userId}", s.handleRevokeURLPermission)
 		})
 	})
 
-	// TODO: SAML/OIDC/WebAuthn, 短縮URLの一覧/更新/削除、権限管理、統計API。
+	// TODO: SAML/OIDC/WebAuthn, システム設定・ユーザー管理API、統計API。
 	return r
 }

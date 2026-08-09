@@ -98,3 +98,153 @@ func (q *Queries) InsertShortURL(ctx context.Context, arg InsertShortURLParams) 
 	err := row.Scan(&id)
 	return id, err
 }
+
+const listAllShortURLs = `-- name: ListAllShortURLs :many
+SELECT id, domain_id, short_code, long_url, title, description, created_by, status, expires_at, source, created_at, updated_at
+FROM short_urls
+ORDER BY created_at DESC
+LIMIT $1 OFFSET $2
+`
+
+type ListAllShortURLsParams struct {
+	Limit  int32 `json:"limit"`
+	Offset int32 `json:"offset"`
+}
+
+func (q *Queries) ListAllShortURLs(ctx context.Context, arg ListAllShortURLsParams) ([]*ShortUrl, error) {
+	rows, err := q.db.Query(ctx, listAllShortURLs, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*ShortUrl
+	for rows.Next() {
+		var i ShortUrl
+		if err := rows.Scan(
+			&i.ID,
+			&i.DomainID,
+			&i.ShortCode,
+			&i.LongUrl,
+			&i.Title,
+			&i.Description,
+			&i.CreatedBy,
+			&i.Status,
+			&i.ExpiresAt,
+			&i.Source,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listShortURLsForUser = `-- name: ListShortURLsForUser :many
+SELECT su.id, su.domain_id, su.short_code, su.long_url, su.title, su.description, su.created_by, su.status, su.expires_at, su.source, su.created_at, su.updated_at
+FROM short_urls su
+JOIN url_permissions up ON up.short_url_id = su.id
+WHERE up.user_id = $1
+ORDER BY su.created_at DESC
+LIMIT $2 OFFSET $3
+`
+
+type ListShortURLsForUserParams struct {
+	UserID uuid.UUID `json:"user_id"`
+	Limit  int32     `json:"limit"`
+	Offset int32     `json:"offset"`
+}
+
+func (q *Queries) ListShortURLsForUser(ctx context.Context, arg ListShortURLsForUserParams) ([]*ShortUrl, error) {
+	rows, err := q.db.Query(ctx, listShortURLsForUser, arg.UserID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*ShortUrl
+	for rows.Next() {
+		var i ShortUrl
+		if err := rows.Scan(
+			&i.ID,
+			&i.DomainID,
+			&i.ShortCode,
+			&i.LongUrl,
+			&i.Title,
+			&i.Description,
+			&i.CreatedBy,
+			&i.Status,
+			&i.ExpiresAt,
+			&i.Source,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const setShortURLStatus = `-- name: SetShortURLStatus :exec
+UPDATE short_urls
+SET status = $2, updated_at = now()
+WHERE id = $1
+`
+
+type SetShortURLStatusParams struct {
+	ID     uuid.UUID      `json:"id"`
+	Status ShortUrlStatus `json:"status"`
+}
+
+func (q *Queries) SetShortURLStatus(ctx context.Context, arg SetShortURLStatusParams) error {
+	_, err := q.db.Exec(ctx, setShortURLStatus, arg.ID, arg.Status)
+	return err
+}
+
+const updateShortURLFields = `-- name: UpdateShortURLFields :one
+UPDATE short_urls
+SET long_url = $2, title = $3, description = $4, expires_at = $5, updated_at = now()
+WHERE id = $1
+RETURNING id, domain_id, short_code, long_url, title, description, created_by, status, expires_at, source, created_at, updated_at
+`
+
+type UpdateShortURLFieldsParams struct {
+	ID          uuid.UUID          `json:"id"`
+	LongUrl     string             `json:"long_url"`
+	Title       pgtype.Text        `json:"title"`
+	Description pgtype.Text        `json:"description"`
+	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+}
+
+func (q *Queries) UpdateShortURLFields(ctx context.Context, arg UpdateShortURLFieldsParams) (*ShortUrl, error) {
+	row := q.db.QueryRow(ctx, updateShortURLFields,
+		arg.ID,
+		arg.LongUrl,
+		arg.Title,
+		arg.Description,
+		arg.ExpiresAt,
+	)
+	var i ShortUrl
+	err := row.Scan(
+		&i.ID,
+		&i.DomainID,
+		&i.ShortCode,
+		&i.LongUrl,
+		&i.Title,
+		&i.Description,
+		&i.CreatedBy,
+		&i.Status,
+		&i.ExpiresAt,
+		&i.Source,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return &i, err
+}

@@ -74,7 +74,34 @@ type CreateInput struct {
 	ExpiresAt   *time.Time
 }
 
-// Store is the persistence port Create depends on.
+// UpdateInput replaces a short URL's editable fields wholesale (short_code,
+// domain_id, created_by and status are not editable here — status changes
+// go through Disable, which is a separate, more restrictive permission).
+type UpdateInput struct {
+	LongURL     string
+	Title       string
+	Description string
+	ExpiresAt   *time.Time
+}
+
+// ListPage bounds how many rows List/ListAll return in one call, so an
+// admin's "list every short URL" can't return an unbounded result set.
+type ListPage struct {
+	Limit  int
+	Offset int
+}
+
+func (p ListPage) normalize() ListPage {
+	if p.Limit <= 0 || p.Limit > 200 {
+		p.Limit = 50
+	}
+	if p.Offset < 0 {
+		p.Offset = 0
+	}
+	return p
+}
+
+// Store is the persistence port Service depends on.
 type Store interface {
 	// ShortCodeSettings returns the current random-generation policy.
 	// Callers must fetch it fresh per Create call rather than cache it:
@@ -92,9 +119,25 @@ type Store interface {
 
 	// FindByID returns ErrNotFound if no short URL with that id exists.
 	FindByID(ctx context.Context, id uuid.UUID) (*ShortURL, error)
+
+	// ListForUser returns short URLs userID holds any url_permissions
+	// grant on (自身が作成/招待された短縮URLの管理のみ、4.1節), newest first.
+	ListForUser(ctx context.Context, userID uuid.UUID, page ListPage) ([]*ShortURL, error)
+
+	// ListAll returns every short URL, newest first — for system_admin's
+	// unrestricted view (4.1節).
+	ListAll(ctx context.Context, page ListPage) ([]*ShortURL, error)
+
+	// UpdateFields replaces long_url/title/description/expires_at.
+	// Returns ErrNotFound if id doesn't exist.
+	UpdateFields(ctx context.Context, id uuid.UUID, in UpdateInput) (*ShortURL, error)
+
+	// SetStatus changes only status (used by Disable). Returns ErrNotFound
+	// if id doesn't exist.
+	SetStatus(ctx context.Context, id uuid.UUID, status Status) error
 }
 
-type Creator struct {
+type Service struct {
 	Store Store
 	// RandomCode generates one candidate code from a charset/length pair;
 	// defaults to a crypto/rand-backed generator. Override in tests for a
@@ -102,7 +145,7 @@ type Creator struct {
 	RandomCode func(charset string, length int) (string, error)
 }
 
-func (c *Creator) randomCode(charset string, length int) (string, error) {
+func (c *Service) randomCode(charset string, length int) (string, error) {
 	if c.RandomCode != nil {
 		return c.RandomCode(charset, length)
 	}
@@ -112,7 +155,7 @@ func (c *Creator) randomCode(charset string, length int) (string, error) {
 // Create validates the long URL and either uses the caller's custom alias
 // or generates a random short_code per short_code_settings, retrying on
 // collision.
-func (c *Creator) Create(ctx context.Context, in CreateInput) (*ShortURL, error) {
+func (c *Service) Create(ctx context.Context, in CreateInput) (*ShortURL, error) {
 	longURL, err := normalizeLongURL(in.LongURL)
 	if err != nil {
 		return nil, err
@@ -149,7 +192,7 @@ func (c *Creator) Create(ctx context.Context, in CreateInput) (*ShortURL, error)
 	return nil, fmt.Errorf("shorturl: exhausted %d random code generation attempts", maxRandomCodeAttempts)
 }
 
-func (c *Creator) insert(ctx context.Context, in CreateInput, longURL, code string) (*ShortURL, error) {
+func (c *Service) insert(ctx context.Context, in CreateInput, longURL, code string) (*ShortURL, error) {
 	return c.Store.CreateShortURL(ctx, ShortURL{
 		DomainID:    in.DomainID,
 		ShortCode:   code,
@@ -161,6 +204,43 @@ func (c *Creator) insert(ctx context.Context, in CreateInput, longURL, code stri
 		ExpiresAt:   in.ExpiresAt,
 		Source:      SourceNative,
 	})
+}
+
+// ListForUser returns the short URLs userID holds any grant on.
+func (c *Service) ListForUser(ctx context.Context, userID uuid.UUID, page ListPage) ([]*ShortURL, error) {
+	return c.Store.ListForUser(ctx, userID, page.normalize())
+}
+
+// ListAll returns every short URL — callers must have already established
+// the caller is a system_admin (4.1節); Service does not re-check authorization.
+func (c *Service) ListAll(ctx context.Context, page ListPage) ([]*ShortURL, error) {
+	return c.Store.ListAll(ctx, page.normalize())
+}
+
+// Update replaces long_url/title/description/expires_at. Callers must have
+// already checked permission.Access.CanEdit; Service does not re-check
+// authorization.
+func (c *Service) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*ShortURL, error) {
+	longURL, err := normalizeLongURL(in.LongURL)
+	if err != nil {
+		return nil, err
+	}
+	return c.Store.UpdateFields(ctx, id, UpdateInput{
+		LongURL:     longURL,
+		Title:       in.Title,
+		Description: in.Description,
+		ExpiresAt:   in.ExpiresAt,
+	})
+}
+
+// Disable deactivates a short URL (status=disabled) instead of hard-deleting
+// it: click_events retains an indefinite history (10節・2.2節) and
+// references short_urls without ON DELETE CASCADE, so an actual DELETE
+// would either fail once the URL has any recorded clicks or silently
+// destroy that history — neither matches the confirmed retention policy.
+// This is what the "URL削除" permission (4.2節, owner-only) maps to.
+func (c *Service) Disable(ctx context.Context, id uuid.UUID) error {
+	return c.Store.SetStatus(ctx, id, StatusDisabled)
 }
 
 func normalizeLongURL(raw string) (string, error) {

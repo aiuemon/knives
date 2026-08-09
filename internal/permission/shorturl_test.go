@@ -84,3 +84,24 @@ func TestResolve_SystemAdminWithOwnGrantUsesGrantNotOverride(t *testing.T) {
 		t.Fatalf("admin's own owner grant should still grant full owner access, got %+v", access)
 	}
 }
+
+func TestWouldOrphanOwnership(t *testing.T) {
+	cases := []struct {
+		name       string
+		role       Role
+		ownerCount int
+		want       bool
+	}{
+		{"last owner revoked", RoleOwner, 1, true},
+		{"one of several owners revoked", RoleOwner, 2, false},
+		{"editor revoked never orphans ownership", RoleEditor, 1, false},
+		{"viewer revoked never orphans ownership", RoleViewer, 0, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := WouldOrphanOwnership(tc.role, tc.ownerCount); got != tc.want {
+				t.Fatalf("WouldOrphanOwnership(%s, %d) = %v, want %v", tc.role, tc.ownerCount, got, tc.want)
+			}
+		})
+	}
+}

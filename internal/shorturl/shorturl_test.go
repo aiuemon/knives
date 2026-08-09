@@ -44,9 +44,63 @@ func (s *fakeStore) FindByID(_ context.Context, id uuid.UUID) (*ShortURL, error)
 	return &su, nil
 }
 
+func (s *fakeStore) ListForUser(_ context.Context, userID uuid.UUID, page ListPage) ([]*ShortURL, error) {
+	var result []*ShortURL
+	for _, su := range s.byID {
+		if su.CreatedBy == userID {
+			cp := su
+			result = append(result, &cp)
+		}
+	}
+	return paginate(result, page), nil
+}
+
+func (s *fakeStore) ListAll(_ context.Context, page ListPage) ([]*ShortURL, error) {
+	var result []*ShortURL
+	for _, su := range s.byID {
+		cp := su
+		result = append(result, &cp)
+	}
+	return paginate(result, page), nil
+}
+
+func paginate(all []*ShortURL, page ListPage) []*ShortURL {
+	if page.Offset >= len(all) {
+		return nil
+	}
+	end := page.Offset + page.Limit
+	if end > len(all) {
+		end = len(all)
+	}
+	return all[page.Offset:end]
+}
+
+func (s *fakeStore) UpdateFields(_ context.Context, id uuid.UUID, in UpdateInput) (*ShortURL, error) {
+	su, ok := s.byID[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	su.LongURL = in.LongURL
+	su.Title = in.Title
+	su.Description = in.Description
+	su.ExpiresAt = in.ExpiresAt
+	s.byID[id] = su
+	return &su, nil
+}
+
+func (s *fakeStore) SetStatus(_ context.Context, id uuid.UUID, status Status) error {
+	su, ok := s.byID[id]
+	if !ok {
+		return ErrNotFound
+	}
+	su.Status = status
+	s.byID[id] = su
+	return nil
+}
+
 func TestCreate_RandomCodeOnFirstAttempt(t *testing.T) {
 	store := newFakeStore("abcdefghijklmnopqrstuvwxyz0123456789", 7)
-	c := &Creator{Store: store}
+	c := &Service{Store: store}
 
 	su, err := c.Create(context.Background(), CreateInput{
 		DomainID:  uuid.New(),
@@ -76,7 +130,7 @@ func TestCreate_RandomCodeRetriesOnCollision(t *testing.T) {
 	// RandomCodeを注入してあらかじめ決めた系列を返させる。
 	sequence := []string{"first", "second"}
 	call := 0
-	c := &Creator{
+	c := &Service{
 		Store: store,
 		RandomCode: func(_ string, _ int) (string, error) {
 			code := sequence[call]
@@ -106,7 +160,7 @@ func TestCreate_RandomCodeExhaustsRetries(t *testing.T) {
 	domainID := uuid.New()
 	store.taken[domainID.String()+":always-taken"] = true
 
-	c := &Creator{
+	c := &Service{
 		Store: store,
 		RandomCode: func(_ string, _ int) (string, error) {
 			return "always-taken", nil
@@ -128,7 +182,7 @@ func TestCreate_RandomCodeExhaustsRetries(t *testing.T) {
 
 func TestCreate_CustomAliasSuccess(t *testing.T) {
 	store := newFakeStore("abc", 5)
-	c := &Creator{Store: store}
+	c := &Service{Store: store}
 
 	su, err := c.Create(context.Background(), CreateInput{
 		DomainID:    uuid.New(),
@@ -149,7 +203,7 @@ func TestCreate_CustomAliasCollisionReturnsErrAliasTaken(t *testing.T) {
 	domainID := uuid.New()
 	store.taken[domainID.String()+":taken-alias"] = true
 
-	c := &Creator{Store: store}
+	c := &Service{Store: store}
 	_, err := c.Create(context.Background(), CreateInput{
 		DomainID:    domainID,
 		CustomAlias: "taken-alias",
@@ -166,7 +220,7 @@ func TestCreate_CustomAliasCollisionReturnsErrAliasTaken(t *testing.T) {
 
 func TestCreate_InvalidAliasRejectedWithoutStoreCall(t *testing.T) {
 	store := newFakeStore("abc", 5)
-	c := &Creator{Store: store}
+	c := &Service{Store: store}
 
 	_, err := c.Create(context.Background(), CreateInput{
 		DomainID:    uuid.New(),
@@ -184,7 +238,7 @@ func TestCreate_InvalidAliasRejectedWithoutStoreCall(t *testing.T) {
 
 func TestCreate_RejectsNonHTTPLongURL(t *testing.T) {
 	store := newFakeStore("abc", 5)
-	c := &Creator{Store: store}
+	c := &Service{Store: store}
 
 	cases := []string{
 		"javascript:alert(1)",
@@ -230,5 +284,106 @@ func TestRandomCode_RejectsEmptyCharsetOrNonPositiveLength(t *testing.T) {
 	}
 	if _, err := randomCode("abc", 0); err == nil {
 		t.Fatalf("expected an error for a non-positive length")
+	}
+}
+
+func TestService_ListForUser_OnlyReturnsThatUsersURLs(t *testing.T) {
+	store := newFakeStore("abc", 5)
+	svc := &Service{Store: store}
+	ctx := context.Background()
+
+	userA := uuid.New()
+	userB := uuid.New()
+	if _, err := svc.Create(ctx, CreateInput{DomainID: uuid.New(), LongURL: "https://example.com/a", CreatedBy: userA}); err != nil {
+		t.Fatalf("Create A: %v", err)
+	}
+	if _, err := svc.Create(ctx, CreateInput{DomainID: uuid.New(), LongURL: "https://example.com/b", CreatedBy: userB}); err != nil {
+		t.Fatalf("Create B: %v", err)
+	}
+
+	listA, err := svc.ListForUser(ctx, userA, ListPage{})
+	if err != nil {
+		t.Fatalf("ListForUser: %v", err)
+	}
+	if len(listA) != 1 || listA[0].CreatedBy != userA {
+		t.Fatalf("expected exactly userA's own URL, got %+v", listA)
+	}
+}
+
+func TestService_ListAll_ReturnsEveryURL(t *testing.T) {
+	store := newFakeStore("abc", 5)
+	svc := &Service{Store: store}
+	ctx := context.Background()
+
+	if _, err := svc.Create(ctx, CreateInput{DomainID: uuid.New(), LongURL: "https://example.com/a", CreatedBy: uuid.New()}); err != nil {
+		t.Fatalf("Create A: %v", err)
+	}
+	if _, err := svc.Create(ctx, CreateInput{DomainID: uuid.New(), LongURL: "https://example.com/b", CreatedBy: uuid.New()}); err != nil {
+		t.Fatalf("Create B: %v", err)
+	}
+
+	all, err := svc.ListAll(ctx, ListPage{})
+	if err != nil {
+		t.Fatalf("ListAll: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("expected 2 URLs, got %d", len(all))
+	}
+}
+
+func TestService_Update_NormalizesLongURLAndReplacesFields(t *testing.T) {
+	store := newFakeStore("abc", 5)
+	svc := &Service{Store: store}
+	ctx := context.Background()
+
+	created, err := svc.Create(ctx, CreateInput{DomainID: uuid.New(), LongURL: "https://example.com/old", CreatedBy: uuid.New()})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	updated, err := svc.Update(ctx, created.ID, UpdateInput{LongURL: "https://example.com/new", Title: "new title"})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if updated.LongURL != "https://example.com/new" || updated.Title != "new title" {
+		t.Fatalf("unexpected update result: %+v", updated)
+	}
+}
+
+func TestService_Update_RejectsInvalidLongURL(t *testing.T) {
+	store := newFakeStore("abc", 5)
+	svc := &Service{Store: store}
+	ctx := context.Background()
+
+	created, err := svc.Create(ctx, CreateInput{DomainID: uuid.New(), LongURL: "https://example.com/old", CreatedBy: uuid.New()})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if _, err := svc.Update(ctx, created.ID, UpdateInput{LongURL: "javascript:alert(1)"}); !errors.Is(err, ErrInvalidLongURL) {
+		t.Fatalf("expected ErrInvalidLongURL, got %v", err)
+	}
+	unchanged, _ := store.FindByID(ctx, created.ID)
+	if unchanged.LongURL != "https://example.com/old" {
+		t.Fatalf("a rejected update must not modify the stored URL, got %+v", unchanged)
+	}
+}
+
+func TestService_Disable_SetsStatusToDisabled(t *testing.T) {
+	store := newFakeStore("abc", 5)
+	svc := &Service{Store: store}
+	ctx := context.Background()
+
+	created, err := svc.Create(ctx, CreateInput{DomainID: uuid.New(), LongURL: "https://example.com/old", CreatedBy: uuid.New()})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := svc.Disable(ctx, created.ID); err != nil {
+		t.Fatalf("Disable: %v", err)
+	}
+	after, _ := store.FindByID(ctx, created.ID)
+	if after.Status != StatusDisabled {
+		t.Fatalf("expected status disabled, got %q", after.Status)
 	}
 }

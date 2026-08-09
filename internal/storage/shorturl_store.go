@@ -95,7 +95,63 @@ func (s *ShortURLStore) FindByID(ctx context.Context, id uuid.UUID) (*shorturl.S
 	if err != nil {
 		return nil, err
 	}
+	return toDomainShortURL(row), nil
+}
 
+func (s *ShortURLStore) ListForUser(ctx context.Context, userID uuid.UUID, page shorturl.ListPage) ([]*shorturl.ShortURL, error) {
+	rows, err := New(s.pool).ListShortURLsForUser(ctx, ListShortURLsForUserParams{
+		UserID: userID,
+		Limit:  int32(page.Limit),
+		Offset: int32(page.Offset),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return toDomainShortURLs(rows), nil
+}
+
+func (s *ShortURLStore) ListAll(ctx context.Context, page shorturl.ListPage) ([]*shorturl.ShortURL, error) {
+	rows, err := New(s.pool).ListAllShortURLs(ctx, ListAllShortURLsParams{
+		Limit:  int32(page.Limit),
+		Offset: int32(page.Offset),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return toDomainShortURLs(rows), nil
+}
+
+func (s *ShortURLStore) UpdateFields(ctx context.Context, id uuid.UUID, in shorturl.UpdateInput) (*shorturl.ShortURL, error) {
+	row, err := New(s.pool).UpdateShortURLFields(ctx, UpdateShortURLFieldsParams{
+		ID:          id,
+		LongUrl:     in.LongURL,
+		Title:       textOrNull(in.Title),
+		Description: textOrNull(in.Description),
+		ExpiresAt:   timestamptzOrNull(in.ExpiresAt),
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, shorturl.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return toDomainShortURL(row), nil
+}
+
+func (s *ShortURLStore) SetStatus(ctx context.Context, id uuid.UUID, status shorturl.Status) error {
+	// generated SetShortURLStatus discards the command tag, but callers
+	// need to know whether id actually existed, so issue it directly here.
+	tag, err := s.pool.Exec(ctx, setShortURLStatus, id, ShortUrlStatus(status))
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return shorturl.ErrNotFound
+	}
+	return nil
+}
+
+func toDomainShortURL(row *ShortUrl) *shorturl.ShortURL {
 	var expiresAt *time.Time
 	if row.ExpiresAt.Valid {
 		t := row.ExpiresAt.Time
@@ -112,7 +168,15 @@ func (s *ShortURLStore) FindByID(ctx context.Context, id uuid.UUID) (*shorturl.S
 		Status:      shorturl.Status(row.Status),
 		ExpiresAt:   expiresAt,
 		Source:      shorturl.Source(row.Source),
-	}, nil
+	}
+}
+
+func toDomainShortURLs(rows []*ShortUrl) []*shorturl.ShortURL {
+	result := make([]*shorturl.ShortURL, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, toDomainShortURL(row))
+	}
+	return result
 }
 
 func isUniqueViolation(err error) bool {

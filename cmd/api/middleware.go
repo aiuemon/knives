@@ -6,6 +6,9 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
+
 	"github.com/aiuemon/knives/internal/auth"
 	"github.com/aiuemon/knives/internal/permission"
 )
@@ -74,6 +77,57 @@ func (s *server) setSessionCookie(w http.ResponseWriter, token string) {
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(s.sessionTTL.Seconds()),
 	})
+}
+
+var (
+	errUnauthorized = errors.New("unauthorized")
+	errHidden       = errors.New("not found or not visible to this subject")
+)
+
+// resolveAccess parses the "id" URL param as a short URL ID and resolves
+// what the authenticated subject may do with it (permission.Resolve).
+// Handlers should treat a non-nil error as "already handled, stop" via
+// writeAccessError rather than inspecting it themselves.
+func (s *server) resolveAccess(ctx context.Context, r *http.Request) (uuid.UUID, permission.Access, permission.Subject, error) {
+	subject, ok := subjectFromContext(ctx)
+	if !ok {
+		return uuid.Nil, permission.Access{}, permission.Subject{}, errUnauthorized
+	}
+
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		return uuid.Nil, permission.Access{}, subject, errHidden
+	}
+
+	grant, err := s.permissions.FindGrant(ctx, id, subject.UserID)
+	if err != nil {
+		return uuid.Nil, permission.Access{}, subject, err
+	}
+
+	access := permission.Resolve(subject, grant)
+	if !access.Visible {
+		// 4.2節: 権限が無いことを403で漏らさず、存在ごと404で秘匿する。
+		return uuid.Nil, permission.Access{}, subject, errHidden
+	}
+	return id, access, subject, nil
+}
+
+// writeAccessError writes the appropriate HTTP response for a
+// resolveAccess error and reports whether the caller should continue
+// handling the request (false means a response was already written).
+func (s *server) writeAccessError(w http.ResponseWriter, r *http.Request, err error) bool {
+	switch {
+	case err == nil:
+		return true
+	case errors.Is(err, errUnauthorized):
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	case errors.Is(err, errHidden):
+		http.NotFound(w, r)
+	default:
+		slog.Error("access resolution failed", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	}
+	return false
 }
 
 func (s *server) clearSessionCookie(w http.ResponseWriter) {

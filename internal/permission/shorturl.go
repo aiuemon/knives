@@ -56,6 +56,16 @@ func Resolve(subject Subject, grant *Grant) Access {
 	return Access{}
 }
 
+// WouldOrphanOwnership reports whether revoking or downgrading a grant
+// currently holding currentRole on a URL with ownerCount total owners would
+// leave that URL with zero owners — a state nobody could recover from,
+// since CanManagePermissions/CanDelete both require an owner grant (4.2節).
+// Callers must check this before revoking/changing a role and refuse the
+// operation if it returns true.
+func WouldOrphanOwnership(currentRole Role, ownerCount int) bool {
+	return currentRole == RoleOwner && ownerCount <= 1
+}
+
 func accessForRole(role Role) Access {
 	switch role {
 	case RoleOwner:

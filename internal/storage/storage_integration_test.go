@@ -162,7 +162,7 @@ func TestPermissionStore_FindGrant(t *testing.T) {
 	}
 
 	domainID := insertDefaultDomain(t, pool, "go.example.com")
-	creator := shorturl.Creator{Store: storage.NewShortURLStore(pool)}
+	creator := shorturl.Service{Store: storage.NewShortURLStore(pool)}
 	su, err := creator.Create(ctx, shorturl.CreateInput{
 		DomainID:  domainID,
 		LongURL:   "https://example.com",
@@ -201,7 +201,7 @@ func TestShortURLStore_CreateShortURL(t *testing.T) {
 		t.Fatalf("CreateUser: %v", err)
 	}
 
-	creator := shorturl.Creator{Store: storage.NewShortURLStore(pool)}
+	creator := shorturl.Service{Store: storage.NewShortURLStore(pool)}
 
 	su, err := creator.Create(ctx, shorturl.CreateInput{
 		DomainID:    domainID,

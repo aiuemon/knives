@@ -18,6 +18,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/aiuemon/knives/internal/auth"
+	"github.com/aiuemon/knives/internal/cache"
 	"github.com/aiuemon/knives/internal/shorturl"
 	"github.com/aiuemon/knives/internal/storage"
 )
@@ -68,6 +69,15 @@ func main() {
 	redisClient := redis.NewClient(&redis.Options{Addr: redisAddr})
 	defer redisClient.Close()
 
+	// cmd/redirect用ホットパスキャッシュを、編集/削除時に無効化するために
+	// ここでも保持する(6節-2)。チャンネル名はcmd/redirectと一致させる必要
+	// がある。
+	shortURLCache, err := cache.New(cache.Config{Redis: redisClient, InvalidationChannel: "shorturl:invalidate"})
+	if err != nil {
+		slog.Error("cache init failed", "error", err)
+		os.Exit(1)
+	}
+
 	authStore := storage.NewAuthStore(pool)
 	credentialStore := storage.NewLocalCredentialStore(pool)
 	permissionStore := storage.NewPermissionStore(pool)
@@ -108,8 +118,9 @@ func main() {
 		},
 		authSettings: authSettingsStore,
 		permissions:  permissionStore,
-		shortURLs:    &shorturl.Creator{Store: shortURLStore},
+		shortURLs:    &shorturl.Service{Store: shortURLStore},
 		shortURLGet:  shortURLStore,
+		cache:        shortURLCache,
 
 		domainID: domainID,
 

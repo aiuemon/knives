@@ -1,23 +1,30 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/aiuemon/knives/internal/auth"
-	"github.com/aiuemon/knives/internal/permission"
 	"github.com/aiuemon/knives/internal/shorturl"
 )
 
 type createShortURLRequest struct {
 	LongURL     string     `json:"long_url"`
 	CustomAlias string     `json:"custom_alias,omitempty"`
+	Title       string     `json:"title,omitempty"`
+	Description string     `json:"description,omitempty"`
+	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+}
+
+type updateShortURLRequest struct {
+	LongURL     string     `json:"long_url"`
 	Title       string     `json:"title,omitempty"`
 	Description string     `json:"description,omitempty"`
 	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
@@ -83,31 +90,49 @@ func (s *server) handleCreateShortURL(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, toShortURLResponse(su))
 }
 
-func (s *server) handleGetShortURL(w http.ResponseWriter, r *http.Request) {
+// handleListShortURLs returns the caller's own short URLs (自身が作成/招待
+// された短縮URLの管理のみ、4.1節). A system_admin instead sees every short
+// URL by default (4.1節: 全短縮URLの閲覧は無制限) unless ?scope=mine is
+// given to see just their own.
+func (s *server) handleListShortURLs(w http.ResponseWriter, r *http.Request) {
 	subject, ok := subjectFromContext(r.Context())
 	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		http.NotFound(w, r)
-		return
+	ctx := r.Context()
+	page := shorturl.ListPage{
+		Limit:  atoiOrZero(r.URL.Query().Get("limit")),
+		Offset: atoiOrZero(r.URL.Query().Get("offset")),
 	}
 
-	ctx := r.Context()
-	grant, err := s.permissions.FindGrant(ctx, id, subject.UserID)
+	var (
+		items []*shorturl.ShortURL
+		err   error
+	)
+	if subject.IsSystemAdmin && r.URL.Query().Get("scope") != "mine" {
+		items, err = s.shortURLs.ListAll(ctx, page)
+	} else {
+		items, err = s.shortURLs.ListForUser(ctx, subject.UserID, page)
+	}
 	if err != nil {
-		slog.Error("permission lookup failed", "error", err)
+		slog.Error("list short urls failed", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	access := permission.Resolve(subject, grant)
-	if !access.Visible {
-		// 4.2節: 権限が無いことを403で漏らさず、存在ごと404で秘匿する。
-		http.NotFound(w, r)
+	resp := make([]shortURLResponse, 0, len(items))
+	for _, su := range items {
+		resp = append(resp, toShortURLResponse(su))
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *server) handleGetShortURL(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	id, access, subject, err := s.resolveAccess(ctx, r)
+	if !s.writeAccessError(w, r, err) {
 		return
 	}
 
@@ -137,6 +162,98 @@ func (s *server) handleGetShortURL(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, toShortURLResponse(su))
+}
+
+func (s *server) handleUpdateShortURL(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	id, access, _, err := s.resolveAccess(ctx, r)
+	if !s.writeAccessError(w, r, err) {
+		return
+	}
+	if !access.CanEdit {
+		http.NotFound(w, r) // 4.2節: 権限不足は403ではなく404で秘匿する
+		return
+	}
+
+	var req updateShortURLRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	su, err := s.shortURLs.Update(ctx, id, shorturl.UpdateInput{
+		LongURL:     req.LongURL,
+		Title:       req.Title,
+		Description: req.Description,
+		ExpiresAt:   req.ExpiresAt,
+	})
+	switch {
+	case errors.Is(err, shorturl.ErrInvalidLongURL):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	case errors.Is(err, shorturl.ErrNotFound):
+		http.NotFound(w, r)
+		return
+	case err != nil:
+		slog.Error("update short url failed", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	s.invalidateShortURLCache(ctx, su)
+	writeJSON(w, http.StatusOK, toShortURLResponse(su))
+}
+
+// handleDeleteShortURL deactivates (status=disabled) rather than hard
+// deletes — see shorturl.Service.Disable for why.
+func (s *server) handleDeleteShortURL(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	id, access, _, err := s.resolveAccess(ctx, r)
+	if !s.writeAccessError(w, r, err) {
+		return
+	}
+	if !access.CanDelete {
+		http.NotFound(w, r)
+		return
+	}
+
+	su, err := s.shortURLGet.FindByID(ctx, id)
+	if errors.Is(err, shorturl.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		slog.Error("find short url before disable failed", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	if err := s.shortURLs.Disable(ctx, id); err != nil {
+		slog.Error("disable short url failed", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	s.invalidateShortURLCache(ctx, su)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// invalidateShortURLCache purges cmd/redirect's hot-path cache (6節-2) so
+// an edit or disable takes effect immediately instead of waiting out the
+// cache's TTL.
+func (s *server) invalidateShortURLCache(ctx context.Context, su *shorturl.ShortURL) {
+	key := su.DomainID.String() + ":" + su.ShortCode
+	if err := s.cache.Invalidate(ctx, key); err != nil {
+		slog.Error("cache invalidate failed", "error", err)
+	}
+}
+
+func atoiOrZero(s string) int {
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {
