@@ -1,5 +1,8 @@
 import { Route, Routes } from "react-router-dom";
+import { AdminRoute } from "./components/AdminRoute";
 import { ProtectedRoute } from "./components/ProtectedRoute";
+import { AdminSettingsPage } from "./pages/AdminSettingsPage";
+import { AdminUsersPage } from "./pages/AdminUsersPage";
 import { ConfirmLinkPage } from "./pages/ConfirmLinkPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { LoginPage } from "./pages/LoginPage";
@@ -28,6 +31,22 @@ function App() {
 					<ProtectedRoute>
 						<PendingLinksPage />
 					</ProtectedRoute>
+				}
+			/>
+			<Route
+				path="/admin/settings"
+				element={
+					<AdminRoute>
+						<AdminSettingsPage />
+					</AdminRoute>
+				}
+			/>
+			<Route
+				path="/admin/users"
+				element={
+					<AdminRoute>
+						<AdminUsersPage />
+					</AdminRoute>
 				}
 			/>
 		</Routes>

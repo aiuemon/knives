@@ -667,6 +667,30 @@ func TestHandleLogout_DeletesSessionAndClearsCookie(t *testing.T) {
 	}
 }
 
+func TestHandleMe_ReportsIsSystemAdmin(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	admin, _ := d.authStore.CreateUser(ctx, "admin@example.com", true)
+	d.permissions.admins[admin.ID] = true
+	token, _ := d.sessions.Create(ctx, admin.ID, time.Hour)
+
+	req := withSessionCookie(httptest.NewRequest(http.MethodGet, "/api/auth/me", nil), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp meResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.IsSystemAdmin {
+		t.Fatalf("expected is_system_admin=true for an admin subject, got %+v", resp)
+	}
+}
+
 func TestRequireAuth_RejectsRequestsWithoutCookie(t *testing.T) {
 	d := newTestServer()
 

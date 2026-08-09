@@ -25,6 +25,14 @@ export function Header() {
 					>
 						保留中の統合リクエスト
 					</Link>
+					{user.is_system_admin && (
+						<Link
+							to="/admin/settings"
+							className="text-gray-600 hover:underline dark:text-gray-300"
+						>
+							管理
+						</Link>
+					)}
 					<span className="text-gray-500 dark:text-gray-400">{user.email}</span>
 					<button
 						type="button"

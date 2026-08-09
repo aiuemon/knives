@@ -66,13 +66,16 @@ func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 type meResponse struct {
-	ID    uuid.UUID `json:"id"`
-	Email string    `json:"email"`
+	ID            uuid.UUID `json:"id"`
+	Email         string    `json:"email"`
+	IsSystemAdmin bool      `json:"is_system_admin"`
 }
 
 // handleMe lets the frontend check whether the session cookie it's holding
 // is still valid, and who it belongs to — needed to restore login state
-// across page reloads without re-submitting credentials.
+// across page reloads without re-submitting credentials. IsSystemAdmin lets
+// the frontend show/hide the admin screens; the server-side
+// requireSystemAdmin check on /api/admin/* is what actually enforces it.
 func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {
 	subject, ok := subjectFromContext(r.Context())
 	if !ok {
@@ -85,7 +88,7 @@ func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, meResponse{ID: user.ID, Email: user.Email})
+	writeJSON(w, http.StatusOK, meResponse{ID: user.ID, Email: user.Email, IsSystemAdmin: subject.IsSystemAdmin})
 }
 
 type localSignupRequest struct {
