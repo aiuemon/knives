@@ -6,13 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthProvider } from "../auth/AuthContext";
 import { LoginPage } from "./LoginPage";
 
-function renderLoginPage() {
+function renderLoginPage(initialEntries = ["/login"]) {
 	const queryClient = new QueryClient({
 		defaultOptions: { queries: { retry: false } },
 	});
 	return render(
 		<QueryClientProvider client={queryClient}>
-			<MemoryRouter>
+			<MemoryRouter initialEntries={initialEntries}>
 				<AuthProvider>
 					<LoginPage />
 				</AuthProvider>
@@ -50,5 +50,40 @@ describe("LoginPage", () => {
 		const email = screen.getByLabelText("メールアドレス") as HTMLInputElement;
 		await user.type(email, "person@example.com");
 		expect(email.value).toBe("person@example.com");
+	});
+
+	it("renders a login link for each enabled SAML IdP", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string) => {
+				if (url.endsWith("/api/auth/saml/idps")) {
+					return new Response(
+						JSON.stringify([{ id: "idp-1", name: "社内ADFS" }]),
+						{ status: 200, headers: { "Content-Type": "application/json" } },
+					);
+				}
+				return new Response(null, { status: 401 });
+			}),
+		);
+		renderLoginPage();
+
+		const link = await screen.findByRole("link", {
+			name: "社内ADFS でログイン",
+		});
+		expect(link).toHaveAttribute("href", "/api/auth/saml/idp-1/login");
+	});
+
+	it("shows a pending-confirmation notice from the SAML redirect", async () => {
+		renderLoginPage(["/login?notice=saml_pending_confirmation"]);
+		expect(
+			await screen.findByText(/確認メールを送信しました/),
+		).toBeInTheDocument();
+	});
+
+	it("shows a generic error notice when SAML login fails", async () => {
+		renderLoginPage(["/login?error=saml_failed"]);
+		expect(
+			await screen.findByText(/SSOログインに失敗しました/),
+		).toBeInTheDocument();
 	});
 });

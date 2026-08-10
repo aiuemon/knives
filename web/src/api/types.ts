@@ -42,6 +42,14 @@ export interface AdminUser {
 	created_at: string;
 }
 
+// PublicSAMLIdP is the unauthenticated login-page view of a SAML IdP —
+// just enough to render a "Login with X" link. See SAMLConfig for the
+// full admin-only view.
+export interface PublicSAMLIdP {
+	id: string;
+	name: string;
+}
+
 export interface SAMLConfig {
 	id: string;
 	name: string;

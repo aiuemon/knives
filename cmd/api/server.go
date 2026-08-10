@@ -15,6 +15,15 @@ import (
 	"github.com/aiuemon/knives/internal/storage"
 )
 
+// samlLoginService is the subset of *auth.SAMLLoginService the login/ACS
+// handlers need; declared here (rather than depending on the concrete type
+// directly) so handler tests can fake it without driving a real crewjam/saml
+// round trip — that's covered thoroughly in internal/auth's own tests.
+type samlLoginService interface {
+	BeginLogin(ctx context.Context, configID uuid.UUID) (string, error)
+	HandleACS(ctx context.Context, configID uuid.UUID, r *http.Request) (*auth.Result, error)
+}
+
 // permissionChecker is the subset of storage.PermissionStore the API
 // handlers need; declared here (rather than depending on the concrete
 // storage type directly) so handler tests can fake it without a database.
@@ -53,12 +62,17 @@ type server struct {
 	shortURLGet  shorturl.Store
 	cache        shortURLCacheInvalidator
 	samlConfigs  *auth.SAMLConfigService
+	samlLogin    samlLoginService
 
 	domainID uuid.UUID
 
 	sessionCookieName string
 	sessionTTL        time.Duration
 	secureCookies     bool
+	// webPublicBaseURL is where handleSAMLACS redirects the browser after
+	// the IdP posts back (3.2節) — SAML's HTTP-POST binding means ACS must
+	// respond with a full-page redirect, never JSON.
+	webPublicBaseURL string
 }
 
 func (s *server) routes() http.Handler {
@@ -78,6 +92,10 @@ func (s *server) routes() http.Handler {
 		r.Get("/auth/local/verify-email", s.handleVerifyEmail)
 		r.Get("/auth/confirm-link", s.handleConfirmLink)
 		r.Post("/auth/logout", s.handleLogout)
+
+		r.Get("/auth/saml/idps", s.handleListSAMLIdPs)
+		r.Get("/auth/saml/{id}/login", s.handleSAMLLoginRedirect)
+		r.Post("/auth/saml/{id}/acs", s.handleSAMLACS)
 
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireAuth)
@@ -111,6 +129,6 @@ func (s *server) routes() http.Handler {
 		})
 	})
 
-	// TODO: SAMLログインフロー(/auth/saml/{id}/login, /acs)、OIDC、WebAuthn、統計API。
+	// TODO: OIDC、WebAuthn、統計API。
 	return r
 }

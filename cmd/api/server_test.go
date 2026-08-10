@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -595,6 +596,22 @@ func (s *fakeSAMLConfigStore) CountAuthIdentitiesForSAMLConfig(_ context.Context
 
 // --- test harness --------------------------------------------------------
 
+// fakeSAMLLoginService lets handler tests drive handleSAMLLoginRedirect /
+// handleSAMLACS without a real crewjam/saml round trip — that protocol
+// logic is tested thoroughly in internal/auth itself.
+type fakeSAMLLoginService struct {
+	beginLoginFunc func(ctx context.Context, configID uuid.UUID) (string, error)
+	handleACSFunc  func(ctx context.Context, configID uuid.UUID, r *http.Request) (*auth.Result, error)
+}
+
+func (f *fakeSAMLLoginService) BeginLogin(ctx context.Context, configID uuid.UUID) (string, error) {
+	return f.beginLoginFunc(ctx, configID)
+}
+
+func (f *fakeSAMLLoginService) HandleACS(ctx context.Context, configID uuid.UUID, r *http.Request) (*auth.Result, error) {
+	return f.handleACSFunc(ctx, configID, r)
+}
+
 type testDeps struct {
 	server       *server
 	authStore    *fakeAuthStore
@@ -607,6 +624,7 @@ type testDeps struct {
 	authSettings *fakeAuthSettings
 	signupStore  *fakeSignupStore
 	samlConfigs  *fakeSAMLConfigStore
+	samlLogin    *fakeSAMLLoginService
 }
 
 func newTestServer() *testDeps {
@@ -625,6 +643,14 @@ func newTestServer() *testDeps {
 		},
 		signupStore: newFakeSignupStore(),
 		samlConfigs: newFakeSAMLConfigStore(),
+		samlLogin: &fakeSAMLLoginService{
+			beginLoginFunc: func(context.Context, uuid.UUID) (string, error) {
+				return "https://idp.example.com/sso?SAMLRequest=stub", nil
+			},
+			handleACSFunc: func(context.Context, uuid.UUID, *http.Request) (*auth.Result, error) {
+				return &auth.Result{Outcome: auth.OutcomeLoggedIn, User: &auth.User{ID: uuid.New(), Email: "saml-user@example.com"}}, nil
+			},
+		},
 	}
 	resolver := &auth.Resolver{
 		Store:           d.authStore,
@@ -651,10 +677,12 @@ func newTestServer() *testDeps {
 		shortURLGet:       d.shortURLs,
 		cache:             d.cache,
 		samlConfigs:       &auth.SAMLConfigService{Store: d.samlConfigs},
+		samlLogin:         d.samlLogin,
 		domainID:          uuid.New(),
 		sessionCookieName: "knives_session",
 		sessionTTL:        time.Hour,
 		secureCookies:     false,
+		webPublicBaseURL:  "http://localhost:5173",
 	}
 	return d
 }
@@ -1715,5 +1743,150 @@ func TestHandleDeleteSAMLConfig_Success(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected an admin.saml_config_deleted audit entry, got %+v", d.authStore.audit)
+	}
+}
+
+// --- SAML login/ACS handler tests ------------------------------------------
+
+func TestHandleListSAMLIdPs_OnlyReturnsEnabledConfigsAndIsPublic(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	enabled, err := (&auth.SAMLConfigService{Store: d.samlConfigs}).Create(ctx, validSAMLConfigRequest(t).toInput())
+	if err != nil {
+		t.Fatalf("seed enabled config: %v", err)
+	}
+	disabledInput := validSAMLConfigRequest(t).toInput()
+	disabledInput.Name = "Disabled IdP"
+	disabledInput.Enabled = false
+	if _, err := (&auth.SAMLConfigService{Store: d.samlConfigs}).Create(ctx, disabledInput); err != nil {
+		t.Fatalf("seed disabled config: %v", err)
+	}
+
+	// 未認証でもアクセスできる(ログイン画面がIdP一覧を出すために必要)。
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/saml/idps", nil)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp []publicSAMLIdPResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp) != 1 || resp[0].ID != enabled.ID {
+		t.Fatalf("expected only the enabled config to be listed, got %+v", resp)
+	}
+}
+
+func TestHandleSAMLLoginRedirect_RedirectsToTheIdP(t *testing.T) {
+	d := newTestServer()
+	configID := uuid.New()
+	d.samlLogin.beginLoginFunc = func(_ context.Context, id uuid.UUID) (string, error) {
+		if id != configID {
+			t.Fatalf("expected configID %s, got %s", configID, id)
+		}
+		return "https://idp.example.com/sso?SAMLRequest=abc", nil
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/saml/"+configID.String()+"/login", nil)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "https://idp.example.com/sso?SAMLRequest=abc" {
+		t.Fatalf("unexpected redirect location: %s", loc)
+	}
+}
+
+func TestHandleSAMLLoginRedirect_UnknownConfigIs404(t *testing.T) {
+	d := newTestServer()
+	d.samlLogin.beginLoginFunc = func(context.Context, uuid.UUID) (string, error) {
+		return "", auth.ErrNotFound
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/saml/"+uuid.New().String()+"/login", nil)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestHandleSAMLACS_LoggedInSetsSessionAndRedirectsHome(t *testing.T) {
+	d := newTestServer()
+	configID := uuid.New()
+	loggedInUser := &auth.User{ID: uuid.New(), Email: "saml-user@example.com"}
+	d.samlLogin.handleACSFunc = func(context.Context, uuid.UUID, *http.Request) (*auth.Result, error) {
+		return &auth.Result{Outcome: auth.OutcomeLoggedIn, User: loggedInUser}, nil
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/saml/"+configID.String()+"/acs", strings.NewReader("SAMLResponse=stub&RelayState=stub"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if loc := rec.Header().Get("Location"); loc != "http://localhost:5173/" {
+		t.Fatalf("expected a redirect to the SPA home, got %s", loc)
+	}
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Name != "knives_session" || cookies[0].Value == "" {
+		t.Fatalf("expected a session cookie to be set, got %+v", cookies)
+	}
+	if _, err := d.sessions.Find(context.Background(), cookies[0].Value); err != nil {
+		t.Fatalf("expected the session to actually exist: %v", err)
+	}
+}
+
+func TestHandleSAMLACS_PendingConfirmationRedirectsWithNotice(t *testing.T) {
+	d := newTestServer()
+	configID := uuid.New()
+	d.samlLogin.handleACSFunc = func(context.Context, uuid.UUID, *http.Request) (*auth.Result, error) {
+		return &auth.Result{Outcome: auth.OutcomePendingConfirmation}, nil
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/saml/"+configID.String()+"/acs", strings.NewReader("SAMLResponse=stub&RelayState=stub"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "http://localhost:5173/login?notice=saml_pending_confirmation" {
+		t.Fatalf("unexpected redirect location: %s", loc)
+	}
+	if len(rec.Result().Cookies()) != 0 {
+		t.Fatalf("expected no session cookie for a pending-confirmation outcome")
+	}
+}
+
+func TestHandleSAMLACS_InvalidResponseRedirectsWithErrorNotFound(t *testing.T) {
+	d := newTestServer()
+	configID := uuid.New()
+	d.samlLogin.handleACSFunc = func(context.Context, uuid.UUID, *http.Request) (*auth.Result, error) {
+		return nil, auth.ErrSAMLResponseInvalid
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/saml/"+configID.String()+"/acs", strings.NewReader("SAMLResponse=stub&RelayState=stub"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	// SAMLは全画面遷移のフローなので、失敗もJSONの4xxではなく
+	// ログイン画面へのリダイレクトで表現する。理由の詳細はcrientに
+	// 漏らさない(汎用エラーのみ)。
+	if rec.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "http://localhost:5173/login?error=saml_failed" {
+		t.Fatalf("unexpected redirect location: %s", loc)
 	}
 }

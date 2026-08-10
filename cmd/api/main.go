@@ -96,6 +96,9 @@ func main() {
 	// web/ のSPA(ログイン→一覧表示→承認、メール確認画面等)の公開URL。
 	// メール内のリンクはここを指す。
 	webPublicBaseURL := getenv("WEB_PUBLIC_BASE_URL", "http://localhost:5173")
+	// このAPIサーバ自身の外部到達可能なURL。SAMLのSP EntityID/ACS URL等、
+	// IdPがコールバックする先はSPAではなくこのAPIなので別に持つ(3.2節)。
+	apiPublicBaseURL := getenv("API_PUBLIC_BASE_URL", "http://localhost:8080")
 
 	resolver := &auth.Resolver{
 		Store:           authStore,
@@ -103,6 +106,13 @@ func main() {
 		AuthSettings:    authSettingsStore,
 		ConfirmBaseURL:  webPublicBaseURL + "/auth/confirm-link",
 		PendingLinksURL: webPublicBaseURL + "/pending-links",
+	}
+
+	samlLogin := &auth.SAMLLoginService{
+		Configs:       samlConfigStore,
+		Nonces:        auth.NewRedisSAMLNonceStore(redisClient),
+		Resolver:      resolver,
+		PublicBaseURL: apiPublicBaseURL,
 	}
 
 	srv := &server{
@@ -123,12 +133,14 @@ func main() {
 		shortURLGet:  shortURLStore,
 		cache:        shortURLCache,
 		samlConfigs:  &auth.SAMLConfigService{Store: samlConfigStore},
+		samlLogin:    samlLogin,
 
 		domainID: domainID,
 
 		sessionCookieName: sessionCookieName,
 		sessionTTL:        sessionTTL,
 		secureCookies:     secureCookies,
+		webPublicBaseURL:  webPublicBaseURL,
 	}
 
 	httpServer := &http.Server{
