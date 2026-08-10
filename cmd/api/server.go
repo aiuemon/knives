@@ -24,6 +24,14 @@ type samlLoginService interface {
 	HandleACS(ctx context.Context, configID uuid.UUID, r *http.Request) (*auth.Result, error)
 }
 
+// oidcLoginService is the subset of *auth.OIDCLoginService the login/
+// callback handlers need; declared here for the same testability reason
+// as samlLoginService.
+type oidcLoginService interface {
+	BeginLogin(ctx context.Context, configID uuid.UUID) (string, error)
+	HandleCallback(ctx context.Context, configID uuid.UUID, r *http.Request) (*auth.Result, error)
+}
+
 // permissionChecker is the subset of storage.PermissionStore the API
 // handlers need; declared here (rather than depending on the concrete
 // storage type directly) so handler tests can fake it without a database.
@@ -64,6 +72,7 @@ type server struct {
 	samlConfigs  *auth.SAMLConfigService
 	samlLogin    samlLoginService
 	oidcConfigs  *auth.OIDCConfigService
+	oidcLogin    oidcLoginService
 
 	domainID uuid.UUID
 
@@ -97,6 +106,10 @@ func (s *server) routes() http.Handler {
 		r.Get("/auth/saml/idps", s.handleListSAMLIdPs)
 		r.Get("/auth/saml/{id}/login", s.handleSAMLLoginRedirect)
 		r.Post("/auth/saml/{id}/acs", s.handleSAMLACS)
+
+		r.Get("/auth/oidc/idps", s.handleListOIDCIdPs)
+		r.Get("/auth/oidc/{id}/login", s.handleOIDCLoginRedirect)
+		r.Get("/auth/oidc/{id}/callback", s.handleOIDCCallback)
 
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireAuth)
@@ -135,6 +148,6 @@ func (s *server) routes() http.Handler {
 		})
 	})
 
-	// TODO: OIDC、WebAuthn、統計API。
+	// TODO: WebAuthn、統計API。
 	return r
 }

@@ -86,4 +86,39 @@ describe("LoginPage", () => {
 			await screen.findByText(/SSOログインに失敗しました/),
 		).toBeInTheDocument();
 	});
+
+	it("renders a login link for each enabled OIDC IdP", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string) => {
+				if (url.endsWith("/api/auth/oidc/idps")) {
+					return new Response(
+						JSON.stringify([{ id: "idp-2", name: "社内Entra ID" }]),
+						{ status: 200, headers: { "Content-Type": "application/json" } },
+					);
+				}
+				return new Response(null, { status: 401 });
+			}),
+		);
+		renderLoginPage();
+
+		const link = await screen.findByRole("link", {
+			name: "社内Entra ID でログイン",
+		});
+		expect(link).toHaveAttribute("href", "/api/auth/oidc/idp-2/login");
+	});
+
+	it("shows a pending-confirmation notice from the OIDC redirect", async () => {
+		renderLoginPage(["/login?notice=oidc_pending_confirmation"]);
+		expect(
+			await screen.findByText(/確認メールを送信しました/),
+		).toBeInTheDocument();
+	});
+
+	it("shows a generic error notice when OIDC login fails", async () => {
+		renderLoginPage(["/login?error=oidc_failed"]);
+		expect(
+			await screen.findByText(/SSOログインに失敗しました/),
+		).toBeInTheDocument();
+	});
 });

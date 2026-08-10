@@ -677,6 +677,19 @@ func (f *fakeSAMLLoginService) HandleACS(ctx context.Context, configID uuid.UUID
 	return f.handleACSFunc(ctx, configID, r)
 }
 
+type fakeOIDCLoginService struct {
+	beginLoginFunc     func(ctx context.Context, configID uuid.UUID) (string, error)
+	handleCallbackFunc func(ctx context.Context, configID uuid.UUID, r *http.Request) (*auth.Result, error)
+}
+
+func (f *fakeOIDCLoginService) BeginLogin(ctx context.Context, configID uuid.UUID) (string, error) {
+	return f.beginLoginFunc(ctx, configID)
+}
+
+func (f *fakeOIDCLoginService) HandleCallback(ctx context.Context, configID uuid.UUID, r *http.Request) (*auth.Result, error) {
+	return f.handleCallbackFunc(ctx, configID, r)
+}
+
 type testDeps struct {
 	server       *server
 	authStore    *fakeAuthStore
@@ -691,6 +704,7 @@ type testDeps struct {
 	samlConfigs  *fakeSAMLConfigStore
 	samlLogin    *fakeSAMLLoginService
 	oidcConfigs  *fakeOIDCConfigStore
+	oidcLogin    *fakeOIDCLoginService
 }
 
 func newTestServer() *testDeps {
@@ -718,6 +732,14 @@ func newTestServer() *testDeps {
 			},
 		},
 		oidcConfigs: newFakeOIDCConfigStore(),
+		oidcLogin: &fakeOIDCLoginService{
+			beginLoginFunc: func(context.Context, uuid.UUID) (string, error) {
+				return "https://idp.example.com/auth?client_id=stub", nil
+			},
+			handleCallbackFunc: func(context.Context, uuid.UUID, *http.Request) (*auth.Result, error) {
+				return &auth.Result{Outcome: auth.OutcomeLoggedIn, User: &auth.User{ID: uuid.New(), Email: "oidc-user@example.com"}}, nil
+			},
+		},
 	}
 	resolver := &auth.Resolver{
 		Store:           d.authStore,
@@ -746,6 +768,7 @@ func newTestServer() *testDeps {
 		samlConfigs:       &auth.SAMLConfigService{Store: d.samlConfigs},
 		samlLogin:         d.samlLogin,
 		oidcConfigs:       &auth.OIDCConfigService{Store: d.oidcConfigs},
+		oidcLogin:         d.oidcLogin,
 		domainID:          uuid.New(),
 		sessionCookieName: "knives_session",
 		sessionTTL:        time.Hour,
@@ -2150,5 +2173,147 @@ func TestHandleDeleteOIDCConfig_Success(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected an admin.oidc_config_deleted audit entry, got %+v", d.authStore.audit)
+	}
+}
+
+// --- OIDC login/callback handler tests --------------------------------------
+
+func TestHandleListOIDCIdPs_OnlyReturnsEnabledConfigsAndIsPublic(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	enabled, err := (&auth.OIDCConfigService{Store: d.oidcConfigs}).Create(ctx, validOIDCConfigRequest().toInput())
+	if err != nil {
+		t.Fatalf("seed enabled config: %v", err)
+	}
+	disabledInput := validOIDCConfigRequest().toInput()
+	disabledInput.Name = "Disabled IdP"
+	disabledInput.Enabled = false
+	if _, err := (&auth.OIDCConfigService{Store: d.oidcConfigs}).Create(ctx, disabledInput); err != nil {
+		t.Fatalf("seed disabled config: %v", err)
+	}
+
+	// 未認証でもアクセスできる(ログイン画面がIdP一覧を出すために必要)。
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/oidc/idps", nil)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp []publicOIDCIdPResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp) != 1 || resp[0].ID != enabled.ID {
+		t.Fatalf("expected only the enabled config to be listed, got %+v", resp)
+	}
+}
+
+func TestHandleOIDCLoginRedirect_RedirectsToTheIdP(t *testing.T) {
+	d := newTestServer()
+	configID := uuid.New()
+	d.oidcLogin.beginLoginFunc = func(_ context.Context, id uuid.UUID) (string, error) {
+		if id != configID {
+			t.Fatalf("expected configID %s, got %s", configID, id)
+		}
+		return "https://idp.example.com/auth?client_id=abc", nil
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/oidc/"+configID.String()+"/login", nil)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "https://idp.example.com/auth?client_id=abc" {
+		t.Fatalf("unexpected redirect location: %s", loc)
+	}
+}
+
+func TestHandleOIDCLoginRedirect_UnknownConfigIs404(t *testing.T) {
+	d := newTestServer()
+	d.oidcLogin.beginLoginFunc = func(context.Context, uuid.UUID) (string, error) {
+		return "", auth.ErrNotFound
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/oidc/"+uuid.New().String()+"/login", nil)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestHandleOIDCCallback_LoggedInSetsSessionAndRedirectsHome(t *testing.T) {
+	d := newTestServer()
+	configID := uuid.New()
+	loggedInUser := &auth.User{ID: uuid.New(), Email: "oidc-user@example.com"}
+	d.oidcLogin.handleCallbackFunc = func(context.Context, uuid.UUID, *http.Request) (*auth.Result, error) {
+		return &auth.Result{Outcome: auth.OutcomeLoggedIn, User: loggedInUser}, nil
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/oidc/"+configID.String()+"/callback?code=stub&state=stub", nil)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if loc := rec.Header().Get("Location"); loc != "http://localhost:5173/" {
+		t.Fatalf("expected a redirect to the SPA home, got %s", loc)
+	}
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Name != "knives_session" || cookies[0].Value == "" {
+		t.Fatalf("expected a session cookie to be set, got %+v", cookies)
+	}
+	if _, err := d.sessions.Find(context.Background(), cookies[0].Value); err != nil {
+		t.Fatalf("expected the session to actually exist: %v", err)
+	}
+}
+
+func TestHandleOIDCCallback_PendingConfirmationRedirectsWithNotice(t *testing.T) {
+	d := newTestServer()
+	configID := uuid.New()
+	d.oidcLogin.handleCallbackFunc = func(context.Context, uuid.UUID, *http.Request) (*auth.Result, error) {
+		return &auth.Result{Outcome: auth.OutcomePendingConfirmation}, nil
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/oidc/"+configID.String()+"/callback?code=stub&state=stub", nil)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "http://localhost:5173/login?notice=oidc_pending_confirmation" {
+		t.Fatalf("unexpected redirect location: %s", loc)
+	}
+	if len(rec.Result().Cookies()) != 0 {
+		t.Fatalf("expected no session cookie for a pending-confirmation outcome")
+	}
+}
+
+func TestHandleOIDCCallback_InvalidResponseRedirectsWithError(t *testing.T) {
+	d := newTestServer()
+	configID := uuid.New()
+	d.oidcLogin.handleCallbackFunc = func(context.Context, uuid.UUID, *http.Request) (*auth.Result, error) {
+		return nil, auth.ErrOIDCResponseInvalid
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/oidc/"+configID.String()+"/callback?code=stub&state=stub", nil)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	// OIDCも全画面遷移のフローなので、失敗もJSONの4xxではなく
+	// ログイン画面へのリダイレクトで表現する。理由の詳細はクライアントに
+	// 漏らさない(汎用エラーのみ)。
+	if rec.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "http://localhost:5173/login?error=oidc_failed" {
+		t.Fatalf("unexpected redirect location: %s", loc)
 	}
 }

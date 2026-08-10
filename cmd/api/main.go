@@ -121,6 +121,12 @@ func main() {
 		Resolver:      resolver,
 		PublicBaseURL: apiPublicBaseURL,
 	}
+	oidcLogin := &auth.OIDCLoginService{
+		Configs:       oidcConfigStore,
+		Nonces:        auth.NewRedisOIDCNonceStore(redisClient),
+		Resolver:      resolver,
+		PublicBaseURL: apiPublicBaseURL,
+	}
 
 	srv := &server{
 		sessions:  auth.NewRedisSessionStore(redisClient),
@@ -142,6 +148,7 @@ func main() {
 		samlConfigs:  &auth.SAMLConfigService{Store: samlConfigStore},
 		samlLogin:    samlLogin,
 		oidcConfigs:  &auth.OIDCConfigService{Store: oidcConfigStore},
+		oidcLogin:    oidcLogin,
 
 		domainID: domainID,
 

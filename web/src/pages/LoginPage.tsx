@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ApiError, api } from "../api/client";
-import type { PublicSAMLIdP } from "../api/types";
+import type { PublicOIDCIdP, PublicSAMLIdP } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 
 export function LoginPage() {
@@ -14,14 +14,22 @@ export function LoginPage() {
 	const { refetch } = useAuth();
 	const [searchParams] = useSearchParams();
 
-	const idpsQuery = useQuery({
+	const samlIdpsQuery = useQuery({
 		queryKey: ["auth", "saml", "idps"],
 		queryFn: () => api.get<PublicSAMLIdP[]>("/auth/saml/idps"),
+		retry: false,
+	});
+	const oidcIdpsQuery = useQuery({
+		queryKey: ["auth", "oidc", "idps"],
+		queryFn: () => api.get<PublicOIDCIdP[]>("/auth/oidc/idps"),
 		retry: false,
 	});
 
 	const notice = searchParams.get("notice");
 	const ssoError = searchParams.get("error");
+	const hasSSOOptions =
+		(samlIdpsQuery.data && samlIdpsQuery.data.length > 0) ||
+		(oidcIdpsQuery.data && oidcIdpsQuery.data.length > 0);
 
 	async function handleSubmit(e: FormEvent) {
 		e.preventDefault();
@@ -54,23 +62,33 @@ export function LoginPage() {
 		<div className="mx-auto mt-20 max-w-sm px-4">
 			<h1 className="mb-6 text-2xl font-semibold">ログイン</h1>
 
-			{notice === "saml_pending_confirmation" && (
+			{(notice === "saml_pending_confirmation" ||
+				notice === "oidc_pending_confirmation") && (
 				<p className="mb-4 rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
 					確認メールを送信しました。既存アカウントの登録メール宛のリンクから統合を承認してください。
 				</p>
 			)}
-			{ssoError === "saml_failed" && (
+			{(ssoError === "saml_failed" || ssoError === "oidc_failed") && (
 				<p className="mb-4 rounded border border-red-300 bg-red-50 p-3 text-sm text-red-900 dark:border-red-700 dark:bg-red-950 dark:text-red-200">
 					SSOログインに失敗しました。もう一度お試しください。
 				</p>
 			)}
 
-			{idpsQuery.data && idpsQuery.data.length > 0 && (
+			{hasSSOOptions && (
 				<div className="mb-6 flex flex-col gap-2">
-					{idpsQuery.data.map((idp) => (
+					{samlIdpsQuery.data?.map((idp) => (
 						<a
-							key={idp.id}
+							key={`saml-${idp.id}`}
 							href={`/api/auth/saml/${idp.id}/login`}
+							className="rounded border border-gray-300 px-4 py-2 text-center hover:bg-gray-50 dark:border-gray-600 dark:hover:bg-gray-800"
+						>
+							{idp.name} でログイン
+						</a>
+					))}
+					{oidcIdpsQuery.data?.map((idp) => (
+						<a
+							key={`oidc-${idp.id}`}
+							href={`/api/auth/oidc/${idp.id}/login`}
 							className="rounded border border-gray-300 px-4 py-2 text-center hover:bg-gray-50 dark:border-gray-600 dark:hover:bg-gray-800"
 						>
 							{idp.name} でログイン
