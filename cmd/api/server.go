@@ -63,6 +63,7 @@ type server struct {
 	cache        shortURLCacheInvalidator
 	samlConfigs  *auth.SAMLConfigService
 	samlLogin    samlLoginService
+	oidcConfigs  *auth.OIDCConfigService
 
 	domainID uuid.UUID
 
@@ -125,6 +126,11 @@ func (s *server) routes() http.Handler {
 				r.Post("/saml-configs", s.handleCreateSAMLConfig)
 				r.Patch("/saml-configs/{id}", s.handleUpdateSAMLConfig)
 				r.Delete("/saml-configs/{id}", s.handleDeleteSAMLConfig)
+
+				r.Get("/oidc-configs", s.handleListOIDCConfigs)
+				r.Post("/oidc-configs", s.handleCreateOIDCConfig)
+				r.Patch("/oidc-configs/{id}", s.handleUpdateOIDCConfig)
+				r.Delete("/oidc-configs/{id}", s.handleDeleteOIDCConfig)
 			})
 		})
 	})

@@ -2,52 +2,55 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError, api } from "../api/client";
-import type { SAMLConfig } from "../api/types";
+import type { OIDCConfig } from "../api/types";
 import { Header } from "../components/Header";
 
-type SAMLConfigForm = {
+type OIDCConfigForm = {
 	name: string;
-	idp_entity_id: string;
-	idp_sso_url: string;
-	idp_certificate: string;
-	email_attribute: string;
-	trusted: boolean;
+	issuer: string;
+	client_id: string;
+	// 編集時に空のままなら既存のシークレットを維持する(サーバは
+	// 一度保存したclient_secretを返さないため、フォームには常に空で
+	// スタートする)。
+	client_secret: string;
+	scopesText: string;
+	require_email_verified_claim: boolean;
 	enabled: boolean;
 };
 
-const emptyForm: SAMLConfigForm = {
+const emptyForm: OIDCConfigForm = {
 	name: "",
-	idp_entity_id: "",
-	idp_sso_url: "",
-	idp_certificate: "",
-	email_attribute: "",
-	trusted: false,
+	issuer: "",
+	client_id: "",
+	client_secret: "",
+	scopesText: "openid email profile",
+	require_email_verified_claim: true,
 	enabled: false,
 };
 
-export function AdminSAMLConfigsPage() {
+export function AdminOIDCConfigsPage() {
 	const queryClient = useQueryClient();
 	const [error, setError] = useState<string | null>(null);
 	const [submitting, setSubmitting] = useState(false);
 	const [pendingId, setPendingId] = useState<string | null>(null);
 	const [editingId, setEditingId] = useState<string | null>(null);
-	const [form, setForm] = useState<SAMLConfigForm>(emptyForm);
+	const [form, setForm] = useState<OIDCConfigForm>(emptyForm);
 
 	const query = useQuery({
-		queryKey: ["admin", "saml-configs"],
-		queryFn: () => api.get<SAMLConfig[]>("/admin/saml-configs"),
+		queryKey: ["admin", "oidc-configs"],
+		queryFn: () => api.get<OIDCConfig[]>("/admin/oidc-configs"),
 	});
 
-	function startEdit(cfg: SAMLConfig) {
+	function startEdit(cfg: OIDCConfig) {
 		setError(null);
 		setEditingId(cfg.id);
 		setForm({
 			name: cfg.name,
-			idp_entity_id: cfg.idp_entity_id,
-			idp_sso_url: cfg.idp_sso_url,
-			idp_certificate: cfg.idp_certificate,
-			email_attribute: cfg.email_attribute,
-			trusted: cfg.trusted,
+			issuer: cfg.issuer,
+			client_id: cfg.client_id,
+			client_secret: "",
+			scopesText: cfg.scopes.join(" "),
+			require_email_verified_claim: cfg.require_email_verified_claim,
 			enabled: cfg.enabled,
 		});
 	}
@@ -57,24 +60,39 @@ export function AdminSAMLConfigsPage() {
 		setForm(emptyForm);
 	}
 
+	function buildRequestBody(f: OIDCConfigForm) {
+		return {
+			name: f.name,
+			issuer: f.issuer,
+			client_id: f.client_id,
+			client_secret: f.client_secret,
+			scopes: f.scopesText.split(/\s+/).filter(Boolean),
+			require_email_verified_claim: f.require_email_verified_claim,
+			enabled: f.enabled,
+		};
+	}
+
 	async function handleSubmit(e: FormEvent) {
 		e.preventDefault();
 		setError(null);
 		setSubmitting(true);
 		try {
 			if (editingId) {
-				const updated = await api.patch<SAMLConfig>(
-					`/admin/saml-configs/${editingId}`,
-					form,
+				const updated = await api.patch<OIDCConfig>(
+					`/admin/oidc-configs/${editingId}`,
+					buildRequestBody(form),
 				);
-				queryClient.setQueryData<SAMLConfig[]>(
-					["admin", "saml-configs"],
+				queryClient.setQueryData<OIDCConfig[]>(
+					["admin", "oidc-configs"],
 					(current) => current?.map((c) => (c.id === editingId ? updated : c)),
 				);
 			} else {
-				const created = await api.post<SAMLConfig>("/admin/saml-configs", form);
-				queryClient.setQueryData<SAMLConfig[]>(
-					["admin", "saml-configs"],
+				const created = await api.post<OIDCConfig>(
+					"/admin/oidc-configs",
+					buildRequestBody(form),
+				);
+				queryClient.setQueryData<OIDCConfig[]>(
+					["admin", "oidc-configs"],
 					(current) => (current ? [...current, created] : [created]),
 				);
 			}
@@ -86,16 +104,23 @@ export function AdminSAMLConfigsPage() {
 		}
 	}
 
-	async function handleToggleEnabled(cfg: SAMLConfig) {
+	async function handleToggleEnabled(cfg: OIDCConfig) {
 		setError(null);
 		setPendingId(cfg.id);
 		try {
-			const updated = await api.patch<SAMLConfig>(
-				`/admin/saml-configs/${cfg.id}`,
-				{ ...cfg, enabled: !cfg.enabled },
+			const updated = await api.patch<OIDCConfig>(
+				`/admin/oidc-configs/${cfg.id}`,
+				{
+					name: cfg.name,
+					issuer: cfg.issuer,
+					client_id: cfg.client_id,
+					scopes: cfg.scopes,
+					require_email_verified_claim: cfg.require_email_verified_claim,
+					enabled: !cfg.enabled,
+				},
 			);
-			queryClient.setQueryData<SAMLConfig[]>(
-				["admin", "saml-configs"],
+			queryClient.setQueryData<OIDCConfig[]>(
+				["admin", "oidc-configs"],
 				(current) => current?.map((c) => (c.id === cfg.id ? updated : c)),
 			);
 		} catch (err) {
@@ -105,16 +130,16 @@ export function AdminSAMLConfigsPage() {
 		}
 	}
 
-	async function handleDelete(cfg: SAMLConfig) {
+	async function handleDelete(cfg: OIDCConfig) {
 		if (!window.confirm(`「${cfg.name}」を削除しますか?`)) {
 			return;
 		}
 		setError(null);
 		setPendingId(cfg.id);
 		try {
-			await api.delete(`/admin/saml-configs/${cfg.id}`);
-			queryClient.setQueryData<SAMLConfig[]>(
-				["admin", "saml-configs"],
+			await api.delete(`/admin/oidc-configs/${cfg.id}`);
+			queryClient.setQueryData<OIDCConfig[]>(
+				["admin", "oidc-configs"],
 				(current) => current?.filter((c) => c.id !== cfg.id),
 			);
 		} catch (err) {
@@ -128,7 +153,7 @@ export function AdminSAMLConfigsPage() {
 		<div>
 			<Header />
 			<div className="mx-auto max-w-3xl px-4 py-8">
-				<h1 className="mb-2 text-2xl font-semibold">SAML設定</h1>
+				<h1 className="mb-2 text-2xl font-semibold">OIDC設定</h1>
 				<nav className="mb-6 flex gap-4 text-sm">
 					<Link
 						to="/admin/settings"
@@ -142,13 +167,13 @@ export function AdminSAMLConfigsPage() {
 					>
 						ユーザー管理
 					</Link>
-					<span className="font-medium text-indigo-600">SAML設定</span>
 					<Link
-						to="/admin/oidc"
+						to="/admin/saml"
 						className="text-gray-600 hover:underline dark:text-gray-300"
 					>
-						OIDC設定
+						SAML設定
 					</Link>
+					<span className="font-medium text-indigo-600">OIDC設定</span>
 				</nav>
 
 				{error && <p className="mb-4 text-sm text-red-600">{error}</p>}
@@ -174,71 +199,72 @@ export function AdminSAMLConfigsPage() {
 					</label>
 					<label className="flex flex-col gap-1">
 						<span className="text-sm text-gray-600 dark:text-gray-300">
-							IdP Entity ID
-						</span>
-						<input
-							type="text"
-							required
-							value={form.idp_entity_id}
-							onChange={(e) =>
-								setForm({ ...form, idp_entity_id: e.target.value })
-							}
-							className="rounded border border-gray-300 px-3 py-2 font-mono text-sm dark:border-gray-600 dark:bg-gray-800"
-						/>
-					</label>
-					<label className="flex flex-col gap-1">
-						<span className="text-sm text-gray-600 dark:text-gray-300">
-							IdP SSO URL
+							Issuer URL
 						</span>
 						<input
 							type="url"
 							required
-							value={form.idp_sso_url}
-							onChange={(e) =>
-								setForm({ ...form, idp_sso_url: e.target.value })
-							}
+							value={form.issuer}
+							onChange={(e) => setForm({ ...form, issuer: e.target.value })}
+							placeholder="https://login.microsoftonline.com/{tenant}/v2.0"
 							className="rounded border border-gray-300 px-3 py-2 font-mono text-sm dark:border-gray-600 dark:bg-gray-800"
 						/>
 					</label>
 					<label className="flex flex-col gap-1">
 						<span className="text-sm text-gray-600 dark:text-gray-300">
-							IdP証明書(PEM形式)
-						</span>
-						<textarea
-							required
-							rows={6}
-							value={form.idp_certificate}
-							onChange={(e) =>
-								setForm({ ...form, idp_certificate: e.target.value })
-							}
-							placeholder="-----BEGIN CERTIFICATE-----"
-							className="rounded border border-gray-300 px-3 py-2 font-mono text-xs dark:border-gray-600 dark:bg-gray-800"
-						/>
-					</label>
-					<label className="flex flex-col gap-1">
-						<span className="text-sm text-gray-600 dark:text-gray-300">
-							メールアドレスの属性名
+							Client ID
 						</span>
 						<input
 							type="text"
 							required
-							value={form.email_attribute}
+							value={form.client_id}
+							onChange={(e) => setForm({ ...form, client_id: e.target.value })}
+							className="rounded border border-gray-300 px-3 py-2 font-mono text-sm dark:border-gray-600 dark:bg-gray-800"
+						/>
+					</label>
+					<label className="flex flex-col gap-1">
+						<span className="text-sm text-gray-600 dark:text-gray-300">
+							Client Secret
+							{editingId && "(変更する場合のみ入力)"}
+						</span>
+						<input
+							type="password"
+							required={!editingId}
+							autoComplete="new-password"
+							value={form.client_secret}
 							onChange={(e) =>
-								setForm({ ...form, email_attribute: e.target.value })
+								setForm({ ...form, client_secret: e.target.value })
 							}
-							placeholder="email"
+							placeholder={editingId ? "(既存のシークレットを維持)" : undefined}
+							className="rounded border border-gray-300 px-3 py-2 font-mono text-sm dark:border-gray-600 dark:bg-gray-800"
+						/>
+					</label>
+					<label className="flex flex-col gap-1">
+						<span className="text-sm text-gray-600 dark:text-gray-300">
+							スコープ(空白区切り、openid必須)
+						</span>
+						<input
+							type="text"
+							required
+							value={form.scopesText}
+							onChange={(e) => setForm({ ...form, scopesText: e.target.value })}
 							className="rounded border border-gray-300 px-3 py-2 font-mono text-sm dark:border-gray-600 dark:bg-gray-800"
 						/>
 					</label>
 					<label className="flex items-start gap-3">
 						<input
 							type="checkbox"
-							checked={form.trusted}
-							onChange={(e) => setForm({ ...form, trusted: e.target.checked })}
+							checked={form.require_email_verified_claim}
+							onChange={(e) =>
+								setForm({
+									...form,
+									require_email_verified_claim: e.target.checked,
+								})
+							}
 							className="mt-1"
 						/>
 						<span className="text-sm">
-							信頼済みIdPとして扱う(組織が完全管理するIdP向け。ONの場合、既存アカウントへの統合を確認メールなしで自動的に行う)
+							email_verifiedクレームがtrueの場合のみ既存アカウントへ自動統合する(OFFの場合、このIdPからのログインは常に確認メールフローに回る)
 						</span>
 					</label>
 					<label className="flex items-start gap-3">
@@ -289,10 +315,12 @@ export function AdminSAMLConfigsPage() {
 								<div className="flex items-start justify-between gap-4">
 									<div>
 										<p className="font-medium">{cfg.name}</p>
-										<p className="text-xs text-gray-500">{cfg.idp_entity_id}</p>
+										<p className="text-xs text-gray-500">{cfg.issuer}</p>
 										<p className="mt-1 text-xs text-gray-500">
 											{cfg.enabled ? "有効" : "無効"} ・{" "}
-											{cfg.trusted ? "信頼済み" : "未信頼(確認メール必須)"}
+											{cfg.require_email_verified_claim
+												? "email_verified必須(自動統合あり)"
+												: "常に確認メール"}
 										</p>
 									</div>
 									<div className="flex shrink-0 gap-2">

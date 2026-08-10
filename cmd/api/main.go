@@ -35,6 +35,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	credentialCipher, err := storage.NewCredentialCipher(os.Getenv("CREDENTIAL_ENCRYPTION_KEY"))
+	if err != nil {
+		slog.Error("invalid CREDENTIAL_ENCRYPTION_KEY", "error", err)
+		os.Exit(1)
+	}
+
 	sessionCookieName := getenv("SESSION_COOKIE_NAME", "knives_session")
 	sessionTTL, err := time.ParseDuration(getenv("SESSION_TTL", "24h"))
 	if err != nil {
@@ -85,6 +91,7 @@ func main() {
 	authSettingsStore := storage.NewAuthSettingsStore(pool)
 	signupVerificationStore := storage.NewLocalSignupVerificationStore(pool)
 	samlConfigStore := storage.NewSAMLConfigStore(pool)
+	oidcConfigStore := storage.NewOIDCConfigStore(pool, credentialCipher)
 
 	domainStore := storage.NewRedirectStore(pool) // FindDefaultDomain is shared with cmd/redirect
 	domainID, err := domainStore.FindDefaultDomain(ctx)
@@ -134,6 +141,7 @@ func main() {
 		cache:        shortURLCache,
 		samlConfigs:  &auth.SAMLConfigService{Store: samlConfigStore},
 		samlLogin:    samlLogin,
+		oidcConfigs:  &auth.OIDCConfigService{Store: oidcConfigStore},
 
 		domainID: domainID,
 

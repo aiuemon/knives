@@ -594,6 +594,71 @@ func (s *fakeSAMLConfigStore) CountAuthIdentitiesForSAMLConfig(_ context.Context
 	return s.identCount[id], nil
 }
 
+type fakeOIDCConfigStore struct {
+	configs    map[uuid.UUID]*auth.OIDCConfig
+	identCount map[uuid.UUID]int
+}
+
+func newFakeOIDCConfigStore() *fakeOIDCConfigStore {
+	return &fakeOIDCConfigStore{configs: map[uuid.UUID]*auth.OIDCConfig{}, identCount: map[uuid.UUID]int{}}
+}
+
+func (s *fakeOIDCConfigStore) ListOIDCConfigs(context.Context) ([]*auth.OIDCConfig, error) {
+	result := make([]*auth.OIDCConfig, 0, len(s.configs))
+	for _, c := range s.configs {
+		result = append(result, c)
+	}
+	return result, nil
+}
+
+func (s *fakeOIDCConfigStore) FindOIDCConfigByID(_ context.Context, id uuid.UUID) (*auth.OIDCConfig, error) {
+	c, ok := s.configs[id]
+	if !ok {
+		return nil, auth.ErrNotFound
+	}
+	return c, nil
+}
+
+func (s *fakeOIDCConfigStore) CreateOIDCConfig(_ context.Context, in auth.OIDCConfigInput) (*auth.OIDCConfig, error) {
+	c := &auth.OIDCConfig{
+		ID: uuid.New(), Name: in.Name, Issuer: in.Issuer, ClientID: in.ClientID,
+		ClientSecret: in.ClientSecret, Scopes: in.Scopes,
+		RequireEmailVerifiedClaim: in.RequireEmailVerifiedClaim, Enabled: in.Enabled,
+	}
+	s.configs[c.ID] = c
+	return c, nil
+}
+
+func (s *fakeOIDCConfigStore) UpdateOIDCConfig(_ context.Context, id uuid.UUID, in auth.OIDCConfigInput) (*auth.OIDCConfig, error) {
+	existing, ok := s.configs[id]
+	if !ok {
+		return nil, auth.ErrNotFound
+	}
+	secret := existing.ClientSecret
+	if in.ClientSecret != "" {
+		secret = in.ClientSecret
+	}
+	c := &auth.OIDCConfig{
+		ID: id, Name: in.Name, Issuer: in.Issuer, ClientID: in.ClientID,
+		ClientSecret: secret, Scopes: in.Scopes,
+		RequireEmailVerifiedClaim: in.RequireEmailVerifiedClaim, Enabled: in.Enabled,
+	}
+	s.configs[id] = c
+	return c, nil
+}
+
+func (s *fakeOIDCConfigStore) DeleteOIDCConfig(_ context.Context, id uuid.UUID) error {
+	if _, ok := s.configs[id]; !ok {
+		return auth.ErrNotFound
+	}
+	delete(s.configs, id)
+	return nil
+}
+
+func (s *fakeOIDCConfigStore) CountAuthIdentitiesForOIDCConfig(_ context.Context, id uuid.UUID) (int, error) {
+	return s.identCount[id], nil
+}
+
 // --- test harness --------------------------------------------------------
 
 // fakeSAMLLoginService lets handler tests drive handleSAMLLoginRedirect /
@@ -625,6 +690,7 @@ type testDeps struct {
 	signupStore  *fakeSignupStore
 	samlConfigs  *fakeSAMLConfigStore
 	samlLogin    *fakeSAMLLoginService
+	oidcConfigs  *fakeOIDCConfigStore
 }
 
 func newTestServer() *testDeps {
@@ -651,6 +717,7 @@ func newTestServer() *testDeps {
 				return &auth.Result{Outcome: auth.OutcomeLoggedIn, User: &auth.User{ID: uuid.New(), Email: "saml-user@example.com"}}, nil
 			},
 		},
+		oidcConfigs: newFakeOIDCConfigStore(),
 	}
 	resolver := &auth.Resolver{
 		Store:           d.authStore,
@@ -678,6 +745,7 @@ func newTestServer() *testDeps {
 		cache:             d.cache,
 		samlConfigs:       &auth.SAMLConfigService{Store: d.samlConfigs},
 		samlLogin:         d.samlLogin,
+		oidcConfigs:       &auth.OIDCConfigService{Store: d.oidcConfigs},
 		domainID:          uuid.New(),
 		sessionCookieName: "knives_session",
 		sessionTTL:        time.Hour,
@@ -1888,5 +1956,199 @@ func TestHandleSAMLACS_InvalidResponseRedirectsWithErrorNotFound(t *testing.T) {
 	}
 	if loc := rec.Header().Get("Location"); loc != "http://localhost:5173/login?error=saml_failed" {
 		t.Fatalf("unexpected redirect location: %s", loc)
+	}
+}
+
+// --- OIDC config handler tests ----------------------------------------------
+
+func validOIDCConfigRequest() oidcConfigRequest {
+	return oidcConfigRequest{
+		Name:                      "社内Entra ID",
+		Issuer:                    "https://login.microsoftonline.com/tenant-id/v2.0",
+		ClientID:                  "client-abc",
+		ClientSecret:              "s3cr3t",
+		Scopes:                    []string{"openid", "email", "profile"},
+		RequireEmailVerifiedClaim: true,
+		Enabled:                   true,
+	}
+}
+
+func TestHandleCreateOIDCConfig_Success(t *testing.T) {
+	d := newTestServer()
+	token := loginAsAdmin(t, d)
+
+	body, _ := json.Marshal(validOIDCConfigRequest())
+	req := withSessionCookie(httptest.NewRequest(http.MethodPost, "/api/admin/oidc-configs", bytes.NewReader(body)), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "s3cr3t") {
+		t.Fatalf("expected the client_secret to never appear in the response, got %s", rec.Body.String())
+	}
+	var resp oidcConfigResponse
+	if err := json.NewDecoder(bytes.NewReader(rec.Body.Bytes())).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Name != "社内Entra ID" || resp.ClientID != "client-abc" {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+
+	found := false
+	for _, entry := range d.authStore.audit {
+		if entry.Action == "admin.oidc_config_created" && entry.TargetID == resp.ID.String() {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected an admin.oidc_config_created audit entry, got %+v", d.authStore.audit)
+	}
+}
+
+func TestHandleCreateOIDCConfig_MissingSecretRejected(t *testing.T) {
+	d := newTestServer()
+	token := loginAsAdmin(t, d)
+
+	req := validOIDCConfigRequest()
+	req.ClientSecret = ""
+	body, _ := json.Marshal(req)
+	httpReq := withSessionCookie(httptest.NewRequest(http.MethodPost, "/api/admin/oidc-configs", bytes.NewReader(body)), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, httpReq)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for a missing client_secret on create, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleCreateOIDCConfig_ScopesWithoutOpenIDRejected(t *testing.T) {
+	d := newTestServer()
+	token := loginAsAdmin(t, d)
+
+	req := validOIDCConfigRequest()
+	req.Scopes = []string{"email", "profile"}
+	body, _ := json.Marshal(req)
+	httpReq := withSessionCookie(httptest.NewRequest(http.MethodPost, "/api/admin/oidc-configs", bytes.NewReader(body)), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, httpReq)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for scopes missing openid, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleListOIDCConfigs_NonAdminForbidden(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+	user, _ := d.authStore.CreateUser(ctx, "user@example.com", true)
+	token, _ := d.sessions.Create(ctx, user.ID, time.Hour)
+
+	req := withSessionCookie(httptest.NewRequest(http.MethodGet, "/api/admin/oidc-configs", nil), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for a non-admin, got %d", rec.Code)
+	}
+}
+
+func TestHandleUpdateOIDCConfig_WithoutSecretKeepsExisting(t *testing.T) {
+	d := newTestServer()
+	token := loginAsAdmin(t, d)
+	ctx := context.Background()
+
+	created, err := d.server.oidcConfigs.Create(ctx, validOIDCConfigRequest().toInput())
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+
+	update := validOIDCConfigRequest()
+	update.Name = "更新後の名前"
+	update.ClientSecret = ""
+	body, _ := json.Marshal(update)
+	req := withSessionCookie(httptest.NewRequest(http.MethodPatch, "/api/admin/oidc-configs/"+created.ID.String(), bytes.NewReader(body)), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp oidcConfigResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Name != "更新後の名前" {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+	if d.oidcConfigs.configs[created.ID].ClientSecret != "s3cr3t" {
+		t.Fatalf("expected the client secret to be preserved when not resent, got %q", d.oidcConfigs.configs[created.ID].ClientSecret)
+	}
+}
+
+func TestHandleUpdateOIDCConfig_UnknownIDIsNotFound(t *testing.T) {
+	d := newTestServer()
+	token := loginAsAdmin(t, d)
+
+	body, _ := json.Marshal(validOIDCConfigRequest())
+	req := withSessionCookie(httptest.NewRequest(http.MethodPatch, "/api/admin/oidc-configs/"+uuid.New().String(), bytes.NewReader(body)), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for an unknown oidc config id, got %d", rec.Code)
+	}
+}
+
+func TestHandleDeleteOIDCConfig_RefusedWhenInUse(t *testing.T) {
+	d := newTestServer()
+	token := loginAsAdmin(t, d)
+	ctx := context.Background()
+
+	created, err := d.server.oidcConfigs.Create(ctx, validOIDCConfigRequest().toInput())
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+	d.oidcConfigs.identCount[created.ID] = 1
+
+	req := withSessionCookie(httptest.NewRequest(http.MethodDelete, "/api/admin/oidc-configs/"+created.ID.String(), nil), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409 refusing to delete a config still in use, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleDeleteOIDCConfig_Success(t *testing.T) {
+	d := newTestServer()
+	token := loginAsAdmin(t, d)
+	ctx := context.Background()
+
+	created, err := d.server.oidcConfigs.Create(ctx, validOIDCConfigRequest().toInput())
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+
+	req := withSessionCookie(httptest.NewRequest(http.MethodDelete, "/api/admin/oidc-configs/"+created.ID.String(), nil), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if _, ok := d.oidcConfigs.configs[created.ID]; ok {
+		t.Fatalf("expected the config to be removed")
+	}
+
+	found := false
+	for _, entry := range d.authStore.audit {
+		if entry.Action == "admin.oidc_config_deleted" && entry.TargetID == created.ID.String() {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected an admin.oidc_config_deleted audit entry, got %+v", d.authStore.audit)
 	}
 }

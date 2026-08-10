@@ -1,6 +1,7 @@
 import { Route, Routes } from "react-router-dom";
 import { AdminRoute } from "./components/AdminRoute";
 import { ProtectedRoute } from "./components/ProtectedRoute";
+import { AdminOIDCConfigsPage } from "./pages/AdminOIDCConfigsPage";
 import { AdminSAMLConfigsPage } from "./pages/AdminSAMLConfigsPage";
 import { AdminSettingsPage } from "./pages/AdminSettingsPage";
 import { AdminUsersPage } from "./pages/AdminUsersPage";
@@ -55,6 +56,14 @@ function App() {
 				element={
 					<AdminRoute>
 						<AdminSAMLConfigsPage />
+					</AdminRoute>
+				}
+			/>
+			<Route
+				path="/admin/oidc"
+				element={
+					<AdminRoute>
+						<AdminOIDCConfigsPage />
 					</AdminRoute>
 				}
 			/>

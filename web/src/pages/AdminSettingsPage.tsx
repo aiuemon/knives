@@ -53,6 +53,12 @@ export function AdminSettingsPage() {
 					>
 						SAML設定
 					</Link>
+					<Link
+						to="/admin/oidc"
+						className="text-gray-600 hover:underline dark:text-gray-300"
+					>
+						OIDC設定
+					</Link>
 				</nav>
 				{query.isLoading && <p>読み込み中…</p>}
 				{query.isError && (

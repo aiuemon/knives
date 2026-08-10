@@ -60,3 +60,23 @@ export interface SAMLConfig {
 	trusted: boolean;
 	enabled: boolean;
 }
+
+// PublicOIDCIdP is the unauthenticated login-page view of an OIDC IdP —
+// just enough to render a "Login with X" link.
+export interface PublicOIDCIdP {
+	id: string;
+	name: string;
+}
+
+// OIDCConfig never carries client_secret — the API never sends it back
+// once stored. See AdminOIDCConfigsPage for how edits without a new
+// secret are handled.
+export interface OIDCConfig {
+	id: string;
+	name: string;
+	issuer: string;
+	client_id: string;
+	scopes: string[];
+	require_email_verified_claim: boolean;
+	enabled: boolean;
+}
