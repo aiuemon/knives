@@ -12,6 +12,22 @@ export interface ShortURL {
 	description?: string;
 	status: string;
 	expires_at?: string;
+	// your_role/can_* describe what the calling user may do with this URL
+	// (4.2節). your_role is "" when visibility comes purely from a
+	// system_admin's unlimited-view override (4.1節) rather than an
+	// actual url_permissions grant — in that case every can_* is false.
+	your_role?: string;
+	can_edit: boolean;
+	can_delete: boolean;
+	can_manage_permissions: boolean;
+}
+
+export interface URLPermissionGrant {
+	user_id: string;
+	email: string;
+	// "owner" | "editor" | "viewer"
+	role: string;
+	granted_at: string;
 }
 
 export interface SignupResponse {

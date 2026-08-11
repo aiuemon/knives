@@ -9,6 +9,7 @@ import { ConfirmLinkPage } from "./pages/ConfirmLinkPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { LoginPage } from "./pages/LoginPage";
 import { PendingLinksPage } from "./pages/PendingLinksPage";
+import { ShortURLPermissionsPage } from "./pages/ShortURLPermissionsPage";
 import { SignupPage } from "./pages/SignupPage";
 import { VerifyEmailPage } from "./pages/VerifyEmailPage";
 
@@ -32,6 +33,14 @@ function App() {
 				element={
 					<ProtectedRoute>
 						<PendingLinksPage />
+					</ProtectedRoute>
+				}
+			/>
+			<Route
+				path="/short-urls/:id/permissions"
+				element={
+					<ProtectedRoute>
+						<ShortURLPermissionsPage />
 					</ProtectedRoute>
 				}
 			/>
