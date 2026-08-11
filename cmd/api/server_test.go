@@ -916,6 +916,9 @@ func TestHandleCreateShortURL_Success(t *testing.T) {
 	if !ok || stored.CreatedBy != user.ID {
 		t.Fatalf("expected the created short URL to record CreatedBy=%s, got %+v", user.ID, stored)
 	}
+	if resp.YourRole != "owner" || !resp.CanEdit || !resp.CanDelete || !resp.CanManagePermissions {
+		t.Fatalf("expected the creator to be reported as a full-access owner, got %+v", resp)
+	}
 }
 
 func TestHandleCreateShortURL_InvalidLongURLIsRejected(t *testing.T) {
@@ -984,6 +987,9 @@ func TestHandleGetShortURL_OwnerCanView(t *testing.T) {
 	if resp.ID != created.ID {
 		t.Fatalf("expected id %s, got %s", created.ID, resp.ID)
 	}
+	if resp.YourRole != "owner" || !resp.CanEdit || !resp.CanDelete || !resp.CanManagePermissions {
+		t.Fatalf("expected the owner's access flags to reflect full access, got %+v", resp)
+	}
 	if len(d.authStore.audit) != 0 {
 		t.Fatalf("an owner viewing their own URL must not write a stats.admin_view audit entry, got %+v", d.authStore.audit)
 	}
@@ -1013,6 +1019,17 @@ func TestHandleGetShortURL_AdminOverrideRecordsAudit(t *testing.T) {
 	if len(d.authStore.audit) != 1 || d.authStore.audit[0].Action != "stats.admin_view" {
 		t.Fatalf("expected one stats.admin_view audit entry (4.1節), got %+v", d.authStore.audit)
 	}
+	var resp shortURLResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// 4.1節: system_adminの無制限閲覧は自身のgrantが無いURLについては
+	// 閲覧のみで編集・削除・権限管理はできない。フロントがボタンの
+	// 出し分けに使うため、your_role/can_*がその通りに反映されている必要が
+	// ある。
+	if resp.YourRole != "" || resp.CanEdit || resp.CanDelete || resp.CanManagePermissions {
+		t.Fatalf("expected AdminOverride access to be view-only with no role, got %+v", resp)
+	}
 }
 
 func TestHandleListShortURLs_RegularUserSeesOwnOnly(t *testing.T) {
@@ -1023,9 +1040,14 @@ func TestHandleListShortURLs_RegularUserSeesOwnOnly(t *testing.T) {
 	other, _ := d.authStore.CreateUser(ctx, "other@example.com", true)
 	token, _ := d.sessions.Create(ctx, owner.ID, time.Hour)
 
-	if _, err := d.server.shortURLs.Create(ctx, shorturl.CreateInput{DomainID: d.server.domainID, LongURL: "https://example.com/mine", CreatedBy: owner.ID}); err != nil {
+	mine, err := d.server.shortURLs.Create(ctx, shorturl.CreateInput{DomainID: d.server.domainID, LongURL: "https://example.com/mine", CreatedBy: owner.ID})
+	if err != nil {
 		t.Fatalf("seed create: %v", err)
 	}
+	// 本番のstorage.ShortURLStore.CreateShortURLは同一トランザクションで
+	// 作成者をownerとしてurl_permissionsへ書き込む(4.2節)。fakeは別々の
+	// storeなのでテスト側で対応する grant を用意する。
+	d.permissions.grants[grantKey(mine.ID, owner.ID)] = &permission.Grant{UserID: owner.ID, Role: permission.RoleOwner}
 	if _, err := d.server.shortURLs.Create(ctx, shorturl.CreateInput{DomainID: d.server.domainID, LongURL: "https://example.com/theirs", CreatedBy: other.ID}); err != nil {
 		t.Fatalf("seed create: %v", err)
 	}
@@ -1043,6 +1065,9 @@ func TestHandleListShortURLs_RegularUserSeesOwnOnly(t *testing.T) {
 	}
 	if len(resp) != 1 || resp[0].LongURL != "https://example.com/mine" {
 		t.Fatalf("expected a regular user to see only their own short URL, got %+v", resp)
+	}
+	if resp[0].YourRole != "owner" || !resp[0].CanEdit || !resp[0].CanDelete || !resp[0].CanManagePermissions {
+		t.Fatalf("expected the owner's role/access flags on each list item, got %+v", resp[0])
 	}
 }
 
@@ -1069,6 +1094,9 @@ func TestHandleListShortURLs_AdminSeesAllByDefault(t *testing.T) {
 	}
 	if len(resp) != 1 {
 		t.Fatalf("expected system_admin to see every short URL by default (4.1節), got %+v", resp)
+	}
+	if resp[0].YourRole != "" || resp[0].CanEdit || resp[0].CanDelete || resp[0].CanManagePermissions {
+		t.Fatalf("expected an admin viewing a URL they hold no grant on to be view-only, got %+v", resp[0])
 	}
 
 	req = withSessionCookie(httptest.NewRequest(http.MethodGet, "/api/short-urls?scope=mine", nil), token)
@@ -1112,6 +1140,9 @@ func TestHandleUpdateShortURL_EditorCanUpdateAndCacheInvalidated(t *testing.T) {
 	}
 	if resp.LongURL != "https://example.com/new" {
 		t.Fatalf("expected updated long_url, got %+v", resp)
+	}
+	if resp.YourRole != "editor" || !resp.CanEdit || resp.CanDelete || resp.CanManagePermissions {
+		t.Fatalf("expected editor access flags (can edit, cannot delete/manage), got %+v", resp)
 	}
 
 	wantKey := d.server.domainID.String() + ":" + created.ShortCode

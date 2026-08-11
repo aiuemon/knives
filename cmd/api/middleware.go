@@ -104,31 +104,34 @@ var (
 )
 
 // resolveAccess parses the "id" URL param as a short URL ID and resolves
-// what the authenticated subject may do with it (permission.Resolve).
-// Handlers should treat a non-nil error as "already handled, stop" via
-// writeAccessError rather than inspecting it themselves.
-func (s *server) resolveAccess(ctx context.Context, r *http.Request) (uuid.UUID, permission.Access, permission.Subject, error) {
+// what the authenticated subject may do with it (permission.Resolve), plus
+// the subject's own grant (nil if their access comes purely from
+// AdminOverride) — callers that echo access back to the client (e.g. so
+// the frontend can decide which buttons to show, or display the caller's
+// role) need both. Handlers should treat a non-nil error as "already
+// handled, stop" via writeAccessError rather than inspecting it themselves.
+func (s *server) resolveAccess(ctx context.Context, r *http.Request) (uuid.UUID, permission.Access, *permission.Grant, permission.Subject, error) {
 	subject, ok := subjectFromContext(ctx)
 	if !ok {
-		return uuid.Nil, permission.Access{}, permission.Subject{}, errUnauthorized
+		return uuid.Nil, permission.Access{}, nil, permission.Subject{}, errUnauthorized
 	}
 
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		return uuid.Nil, permission.Access{}, subject, errHidden
+		return uuid.Nil, permission.Access{}, nil, subject, errHidden
 	}
 
 	grant, err := s.permissions.FindGrant(ctx, id, subject.UserID)
 	if err != nil {
-		return uuid.Nil, permission.Access{}, subject, err
+		return uuid.Nil, permission.Access{}, nil, subject, err
 	}
 
 	access := permission.Resolve(subject, grant)
 	if !access.Visible {
 		// 4.2節: 権限が無いことを403で漏らさず、存在ごと404で秘匿する。
-		return uuid.Nil, permission.Access{}, subject, errHidden
+		return uuid.Nil, permission.Access{}, nil, subject, errHidden
 	}
-	return id, access, subject, nil
+	return id, access, grant, subject, nil
 }
 
 // writeAccessError writes the appropriate HTTP response for a

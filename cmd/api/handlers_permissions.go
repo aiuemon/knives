@@ -28,7 +28,7 @@ type urlPermissionResponse struct {
 // viewers/editors don't get to enumerate it.
 func (s *server) handleListURLPermissions(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	id, access, _, err := s.resolveAccess(ctx, r)
+	id, access, _, _, err := s.resolveAccess(ctx, r)
 	if !s.writeAccessError(w, r, err) {
 		return
 	}
@@ -68,7 +68,7 @@ func (s *server) handleGrantURLPermission(w http.ResponseWriter, r *http.Request
 		return
 	}
 	ctx := r.Context()
-	id, access, _, err := s.resolveAccess(ctx, r)
+	id, access, _, _, err := s.resolveAccess(ctx, r)
 	if !s.writeAccessError(w, r, err) {
 		return
 	}
@@ -118,7 +118,7 @@ func (s *server) handleGrantURLPermission(w http.ResponseWriter, r *http.Request
 // able to manage it or delete it.
 func (s *server) handleRevokeURLPermission(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	id, access, _, err := s.resolveAccess(ctx, r)
+	id, access, _, _, err := s.resolveAccess(ctx, r)
 	if !s.writeAccessError(w, r, err) {
 		return
 	}

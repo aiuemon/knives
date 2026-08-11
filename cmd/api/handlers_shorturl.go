@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aiuemon/knives/internal/auth"
+	"github.com/aiuemon/knives/internal/permission"
 	"github.com/aiuemon/knives/internal/shorturl"
 )
 
@@ -38,18 +39,35 @@ type shortURLResponse struct {
 	Description string     `json:"description,omitempty"`
 	Status      string     `json:"status"`
 	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+	// YourRole is the caller's own url_permissions role ("owner",
+	// "editor", "viewer"), or "" when their visibility comes purely from
+	// AdminOverride (system_admin viewing a URL they hold no grant on,
+	// 4.1節) — the frontend needs this (and the Can* flags below) to
+	// decide which of edit/delete/manage-permissions buttons to show,
+	// since a system_admin's unlimited view is otherwise view-only.
+	YourRole             string `json:"your_role,omitempty"`
+	CanEdit              bool   `json:"can_edit"`
+	CanDelete            bool   `json:"can_delete"`
+	CanManagePermissions bool   `json:"can_manage_permissions"`
 }
 
-func toShortURLResponse(su *shorturl.ShortURL) shortURLResponse {
-	return shortURLResponse{
-		ID:          su.ID,
-		ShortCode:   su.ShortCode,
-		LongURL:     su.LongURL,
-		Title:       su.Title,
-		Description: su.Description,
-		Status:      string(su.Status),
-		ExpiresAt:   su.ExpiresAt,
+func toShortURLResponse(su *shorturl.ShortURL, access permission.Access, grant *permission.Grant) shortURLResponse {
+	resp := shortURLResponse{
+		ID:                   su.ID,
+		ShortCode:            su.ShortCode,
+		LongURL:              su.LongURL,
+		Title:                su.Title,
+		Description:          su.Description,
+		Status:               string(su.Status),
+		ExpiresAt:            su.ExpiresAt,
+		CanEdit:              access.CanEdit,
+		CanDelete:            access.CanDelete,
+		CanManagePermissions: access.CanManagePermissions,
 	}
+	if grant != nil {
+		resp.YourRole = string(grant.Role)
+	}
+	return resp
 }
 
 func (s *server) handleCreateShortURL(w http.ResponseWriter, r *http.Request) {
@@ -87,7 +105,11 @@ func (s *server) handleCreateShortURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, toShortURLResponse(su))
+	// 作成者は同一トランザクション内で自動的にownerになる
+	// (shorturl.Store.CreateShortURLのドキュメント参照、4.2節)。
+	ownerGrant := &permission.Grant{UserID: subject.UserID, Role: permission.RoleOwner}
+	ownerAccess := permission.Resolve(subject, ownerGrant)
+	writeJSON(w, http.StatusCreated, toShortURLResponse(su, ownerAccess, ownerGrant))
 }
 
 // handleListShortURLs returns the caller's own short URLs (自身が作成/招待
@@ -124,14 +146,21 @@ func (s *server) handleListShortURLs(w http.ResponseWriter, r *http.Request) {
 
 	resp := make([]shortURLResponse, 0, len(items))
 	for _, su := range items {
-		resp = append(resp, toShortURLResponse(su))
+		grant, err := s.permissions.FindGrant(ctx, su.ID, subject.UserID)
+		if err != nil {
+			slog.Error("find grant failed while building short url list", "error", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		access := permission.Resolve(subject, grant)
+		resp = append(resp, toShortURLResponse(su, access, grant))
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *server) handleGetShortURL(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	id, access, subject, err := s.resolveAccess(ctx, r)
+	id, access, grant, subject, err := s.resolveAccess(ctx, r)
 	if !s.writeAccessError(w, r, err) {
 		return
 	}
@@ -161,12 +190,12 @@ func (s *server) handleGetShortURL(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusOK, toShortURLResponse(su))
+	writeJSON(w, http.StatusOK, toShortURLResponse(su, access, grant))
 }
 
 func (s *server) handleUpdateShortURL(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	id, access, _, err := s.resolveAccess(ctx, r)
+	id, access, grant, _, err := s.resolveAccess(ctx, r)
 	if !s.writeAccessError(w, r, err) {
 		return
 	}
@@ -201,14 +230,14 @@ func (s *server) handleUpdateShortURL(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.invalidateShortURLCache(ctx, su)
-	writeJSON(w, http.StatusOK, toShortURLResponse(su))
+	writeJSON(w, http.StatusOK, toShortURLResponse(su, access, grant))
 }
 
 // handleDeleteShortURL deactivates (status=disabled) rather than hard
 // deletes — see shorturl.Service.Disable for why.
 func (s *server) handleDeleteShortURL(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	id, access, _, err := s.resolveAccess(ctx, r)
+	id, access, _, _, err := s.resolveAccess(ctx, r)
 	if !s.writeAccessError(w, r, err) {
 		return
 	}
