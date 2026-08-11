@@ -12,6 +12,7 @@ export interface ShortURL {
 	description?: string;
 	status: string;
 	expires_at?: string;
+	created_at: string;
 	// your_role/can_* describe what the calling user may do with this URL
 	// (4.2節). your_role is "" when visibility comes purely from a
 	// system_admin's unlimited-view override (4.1節) rather than an
@@ -20,6 +21,29 @@ export interface ShortURL {
 	can_edit: boolean;
 	can_delete: boolean;
 	can_manage_permissions: boolean;
+}
+
+// ShortURLListItem is one row of GET /short-urls (4.1節の一覧表示).
+// creator_email is present only when the caller is a system_admin.
+export interface ShortURLListItem extends ShortURL {
+	click_count: number;
+	creator_email?: string;
+}
+
+// "short_code" | "long_url" | "title" | "created_at" | "click_count" | "creator_email"
+export type ShortURLSortField =
+	| "short_code"
+	| "long_url"
+	| "title"
+	| "created_at"
+	| "click_count"
+	| "creator_email";
+
+export type SortDirection = "asc" | "desc";
+
+export interface ShortURLListResponse {
+	items: ShortURLListItem[];
+	total: number;
 }
 
 export interface URLPermissionGrant {

@@ -45,12 +45,10 @@ type Querier interface {
 	FindUserByEmail(ctx context.Context, email string) (*FindUserByEmailRow, error)
 	FindUserByID(ctx context.Context, id uuid.UUID) (*FindUserByIDRow, error)
 	InsertClickEvent(ctx context.Context, arg InsertClickEventParams) (int64, error)
-	InsertShortURL(ctx context.Context, arg InsertShortURLParams) (uuid.UUID, error)
+	InsertShortURL(ctx context.Context, arg InsertShortURLParams) (*InsertShortURLRow, error)
 	InsertURLPermission(ctx context.Context, arg InsertURLPermissionParams) error
-	ListAllShortURLs(ctx context.Context, arg ListAllShortURLsParams) ([]*ShortUrl, error)
 	ListOIDCConfigs(ctx context.Context) ([]*IdpOidcConfig, error)
 	ListSAMLConfigs(ctx context.Context) ([]*IdpSamlConfig, error)
-	ListShortURLsForUser(ctx context.Context, arg ListShortURLsForUserParams) ([]*ShortUrl, error)
 	ListURLPermissions(ctx context.Context, shortUrlID uuid.UUID) ([]*ListURLPermissionsRow, error)
 	ListUsers(ctx context.Context, arg ListUsersParams) ([]*ListUsersRow, error)
 	RecordAuditLog(ctx context.Context, arg RecordAuditLogParams) error
@@ -64,6 +62,10 @@ type Querier interface {
 	UpdateOIDCConfig(ctx context.Context, arg UpdateOIDCConfigParams) (*IdpOidcConfig, error)
 	UpdateOIDCConfigWithSecret(ctx context.Context, arg UpdateOIDCConfigWithSecretParams) (*IdpOidcConfig, error)
 	UpdateSAMLConfig(ctx context.Context, arg UpdateSAMLConfigParams) (*IdpSamlConfig, error)
+	// ListShortURLsForUser/ListAllShortURLs (filter+sort+pagination+total count,
+	// 4.1節) are hand-written in shorturl_store.go instead of here: sqlc can't
+	// parameterize a dynamic ORDER BY column, which this listing needs to let
+	// every displayed field be sortable.
 	UpdateShortURLFields(ctx context.Context, arg UpdateShortURLFieldsParams) (*ShortUrl, error)
 	UpsertClickStatsDaily(ctx context.Context, arg UpsertClickStatsDailyParams) error
 	UpsertLocalCredentialPassword(ctx context.Context, arg UpsertLocalCredentialPasswordParams) error

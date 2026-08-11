@@ -287,13 +287,21 @@ func (s *fakeCredentials) ResetFailedAttempts(_ context.Context, userID uuid.UUI
 }
 
 type fakeShortURLStore struct {
-	byID    map[uuid.UUID]shorturl.ShortURL
-	charset string
-	length  int
+	byID          map[uuid.UUID]shorturl.ShortURL
+	charset       string
+	length        int
+	creatorEmails map[uuid.UUID]string
+	clickCounts   map[uuid.UUID]int64
 }
 
 func newFakeShortURLStore() *fakeShortURLStore {
-	return &fakeShortURLStore{byID: map[uuid.UUID]shorturl.ShortURL{}, charset: "abcdefghijklmnopqrstuvwxyz0123456789", length: 7}
+	return &fakeShortURLStore{
+		byID:          map[uuid.UUID]shorturl.ShortURL{},
+		charset:       "abcdefghijklmnopqrstuvwxyz0123456789",
+		length:        7,
+		creatorEmails: map[uuid.UUID]string{},
+		clickCounts:   map[uuid.UUID]int64{},
+	}
 }
 
 func (s *fakeShortURLStore) ShortCodeSettings(context.Context) (string, int, error) {
@@ -314,39 +322,100 @@ func (s *fakeShortURLStore) FindByID(_ context.Context, id uuid.UUID) (*shorturl
 	return &su, nil
 }
 
-func (s *fakeShortURLStore) ListForUser(_ context.Context, userID uuid.UUID, page shorturl.ListPage) ([]*shorturl.ShortURL, error) {
-	var result []*shorturl.ShortURL
+func (s *fakeShortURLStore) ListForUser(_ context.Context, userID uuid.UUID, page shorturl.ListPage) ([]*shorturl.ListItem, int, error) {
+	var result []*shorturl.ListItem
 	for _, su := range s.byID {
 		if su.CreatedBy == userID {
-			cp := su
-			result = append(result, &cp)
+			result = append(result, s.toListItem(su))
 		}
 	}
-	return paginateShortURLs(result, page), nil
+	return s.filterSortPaginate(result, page)
 }
 
-func (s *fakeShortURLStore) ListAll(_ context.Context, page shorturl.ListPage) ([]*shorturl.ShortURL, error) {
-	var result []*shorturl.ShortURL
+func (s *fakeShortURLStore) ListAll(_ context.Context, page shorturl.ListPage) ([]*shorturl.ListItem, int, error) {
+	var result []*shorturl.ListItem
 	for _, su := range s.byID {
-		cp := su
-		result = append(result, &cp)
+		result = append(result, s.toListItem(su))
 	}
-	return paginateShortURLs(result, page), nil
+	return s.filterSortPaginate(result, page)
 }
 
-func paginateShortURLs(all []*shorturl.ShortURL, page shorturl.ListPage) []*shorturl.ShortURL {
-	if page.Offset >= len(all) {
-		return nil
+func (s *fakeShortURLStore) toListItem(su shorturl.ShortURL) *shorturl.ListItem {
+	return &shorturl.ListItem{
+		ShortURL:     su,
+		CreatorEmail: s.creatorEmails[su.CreatedBy],
+		ClickCount:   s.clickCounts[su.ID],
 	}
+}
+
+func (s *fakeShortURLStore) filterSortPaginate(all []*shorturl.ListItem, page shorturl.ListPage) ([]*shorturl.ListItem, int, error) {
+	filter := strings.ToLower(strings.TrimSpace(page.Filter))
+	if filter != "" {
+		filtered := all[:0]
+		for _, item := range all {
+			haystack := strings.ToLower(item.ShortCode + " " + item.LongURL + " " + item.Title + " " + item.CreatorEmail)
+			if strings.Contains(haystack, filter) {
+				filtered = append(filtered, item)
+			}
+		}
+		all = filtered
+	}
+
+	sortBy := page.SortBy
+	if sortBy == "" {
+		sortBy = shorturl.SortByCreatedAt
+	}
+	compare := func(a, b *shorturl.ListItem) int {
+		switch sortBy {
+		case shorturl.SortByShortCode:
+			return strings.Compare(a.ShortCode, b.ShortCode)
+		case shorturl.SortByLongURL:
+			return strings.Compare(a.LongURL, b.LongURL)
+		case shorturl.SortByTitle:
+			return strings.Compare(a.Title, b.Title)
+		case shorturl.SortByClickCount:
+			switch {
+			case a.ClickCount < b.ClickCount:
+				return -1
+			case a.ClickCount > b.ClickCount:
+				return 1
+			default:
+				return 0
+			}
+		case shorturl.SortByCreatorEmail:
+			return strings.Compare(a.CreatorEmail, b.CreatorEmail)
+		default:
+			switch {
+			case a.CreatedAt.Before(b.CreatedAt):
+				return -1
+			case a.CreatedAt.After(b.CreatedAt):
+				return 1
+			default:
+				return 0
+			}
+		}
+	}
+	sort.SliceStable(all, func(i, j int) bool {
+		c := compare(all[i], all[j])
+		if page.SortDir == shorturl.SortDesc {
+			return c > 0
+		}
+		return c < 0
+	})
+
+	total := len(all)
 	limit := page.Limit
 	if limit <= 0 {
 		limit = 50
+	}
+	if page.Offset >= len(all) {
+		return nil, total, nil
 	}
 	end := page.Offset + limit
 	if end > len(all) {
 		end = len(all)
 	}
-	return all[page.Offset:end]
+	return all[page.Offset:end], total, nil
 }
 
 func (s *fakeShortURLStore) UpdateFields(_ context.Context, id uuid.UUID, in shorturl.UpdateInput) (*shorturl.ShortURL, error) {
@@ -1059,15 +1128,18 @@ func TestHandleListShortURLs_RegularUserSeesOwnOnly(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	var resp []shortURLResponse
+	var resp shortURLListResponse
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(resp) != 1 || resp[0].LongURL != "https://example.com/mine" {
+	if resp.Total != 1 || len(resp.Items) != 1 || resp.Items[0].LongURL != "https://example.com/mine" {
 		t.Fatalf("expected a regular user to see only their own short URL, got %+v", resp)
 	}
-	if resp[0].YourRole != "owner" || !resp[0].CanEdit || !resp[0].CanDelete || !resp[0].CanManagePermissions {
-		t.Fatalf("expected the owner's role/access flags on each list item, got %+v", resp[0])
+	if resp.Items[0].YourRole != "owner" || !resp.Items[0].CanEdit || !resp.Items[0].CanDelete || !resp.Items[0].CanManagePermissions {
+		t.Fatalf("expected the owner's role/access flags on each list item, got %+v", resp.Items[0])
+	}
+	if resp.Items[0].CreatorEmail != nil {
+		t.Fatalf("expected creator_email to be omitted for a non-admin viewer, got %+v", resp.Items[0])
 	}
 }
 
@@ -1083,32 +1155,144 @@ func TestHandleListShortURLs_AdminSeesAllByDefault(t *testing.T) {
 	if _, err := d.server.shortURLs.Create(ctx, shorturl.CreateInput{DomainID: d.server.domainID, LongURL: "https://example.com/mine", CreatedBy: owner.ID}); err != nil {
 		t.Fatalf("seed create: %v", err)
 	}
+	d.shortURLs.creatorEmails[owner.ID] = "owner@example.com"
 
 	req := withSessionCookie(httptest.NewRequest(http.MethodGet, "/api/short-urls", nil), token)
 	rec := httptest.NewRecorder()
 	d.server.routes().ServeHTTP(rec, req)
 
-	var resp []shortURLResponse
+	var resp shortURLListResponse
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(resp) != 1 {
+	if resp.Total != 1 || len(resp.Items) != 1 {
 		t.Fatalf("expected system_admin to see every short URL by default (4.1節), got %+v", resp)
 	}
-	if resp[0].YourRole != "" || resp[0].CanEdit || resp[0].CanDelete || resp[0].CanManagePermissions {
-		t.Fatalf("expected an admin viewing a URL they hold no grant on to be view-only, got %+v", resp[0])
+	if resp.Items[0].YourRole != "" || resp.Items[0].CanEdit || resp.Items[0].CanDelete || resp.Items[0].CanManagePermissions {
+		t.Fatalf("expected an admin viewing a URL they hold no grant on to be view-only, got %+v", resp.Items[0])
+	}
+	if resp.Items[0].CreatorEmail == nil || *resp.Items[0].CreatorEmail != "owner@example.com" {
+		t.Fatalf("expected creator_email to be shown to a system_admin, got %+v", resp.Items[0])
 	}
 
 	req = withSessionCookie(httptest.NewRequest(http.MethodGet, "/api/short-urls?scope=mine", nil), token)
 	rec = httptest.NewRecorder()
 	d.server.routes().ServeHTTP(rec, req)
 
-	resp = nil
+	resp = shortURLListResponse{}
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(resp) != 0 {
+	if len(resp.Items) != 0 {
 		t.Fatalf("expected ?scope=mine to restrict an admin to their own short URLs, got %+v", resp)
+	}
+}
+
+func TestHandleListShortURLs_FilterMatchesAnyDisplayedTextField(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	owner, _ := d.authStore.CreateUser(ctx, "owner@example.com", true)
+	token, _ := d.sessions.Create(ctx, owner.ID, time.Hour)
+
+	alpha, err := d.server.shortURLs.Create(ctx, shorturl.CreateInput{DomainID: d.server.domainID, LongURL: "https://example.com/alpha", Title: "Alpha Page", CreatedBy: owner.ID})
+	if err != nil {
+		t.Fatalf("seed create alpha: %v", err)
+	}
+	d.permissions.grants[grantKey(alpha.ID, owner.ID)] = &permission.Grant{UserID: owner.ID, Role: permission.RoleOwner}
+	beta, err := d.server.shortURLs.Create(ctx, shorturl.CreateInput{DomainID: d.server.domainID, LongURL: "https://example.com/beta", Title: "Beta Page", CreatedBy: owner.ID})
+	if err != nil {
+		t.Fatalf("seed create beta: %v", err)
+	}
+	d.permissions.grants[grantKey(beta.ID, owner.ID)] = &permission.Grant{UserID: owner.ID, Role: permission.RoleOwner}
+
+	req := withSessionCookie(httptest.NewRequest(http.MethodGet, "/api/short-urls?filter=alpha", nil), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	var resp shortURLListResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Total != 1 || len(resp.Items) != 1 || resp.Items[0].Title != "Alpha Page" {
+		t.Fatalf("expected filter=alpha to match only the Alpha Page row, got %+v", resp)
+	}
+}
+
+func TestHandleListShortURLs_SortByClickCountDescending(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	owner, _ := d.authStore.CreateUser(ctx, "owner@example.com", true)
+	token, _ := d.sessions.Create(ctx, owner.ID, time.Hour)
+
+	low, err := d.server.shortURLs.Create(ctx, shorturl.CreateInput{DomainID: d.server.domainID, LongURL: "https://example.com/low", CreatedBy: owner.ID})
+	if err != nil {
+		t.Fatalf("seed create low: %v", err)
+	}
+	d.permissions.grants[grantKey(low.ID, owner.ID)] = &permission.Grant{UserID: owner.ID, Role: permission.RoleOwner}
+	high, err := d.server.shortURLs.Create(ctx, shorturl.CreateInput{DomainID: d.server.domainID, LongURL: "https://example.com/high", CreatedBy: owner.ID})
+	if err != nil {
+		t.Fatalf("seed create high: %v", err)
+	}
+	d.permissions.grants[grantKey(high.ID, owner.ID)] = &permission.Grant{UserID: owner.ID, Role: permission.RoleOwner}
+	d.shortURLs.clickCounts[low.ID] = 1
+	d.shortURLs.clickCounts[high.ID] = 100
+
+	req := withSessionCookie(httptest.NewRequest(http.MethodGet, "/api/short-urls?sort_by=click_count&sort_dir=desc", nil), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	var resp shortURLListResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Items) != 2 || resp.Items[0].LongURL != "https://example.com/high" || resp.Items[1].LongURL != "https://example.com/low" {
+		t.Fatalf("expected sort_by=click_count&sort_dir=desc to order high before low, got %+v", resp.Items)
+	}
+}
+
+func TestHandleListShortURLs_InvalidSortReturns400(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	owner, _ := d.authStore.CreateUser(ctx, "owner@example.com", true)
+	token, _ := d.sessions.Create(ctx, owner.ID, time.Hour)
+
+	req := withSessionCookie(httptest.NewRequest(http.MethodGet, "/api/short-urls?sort_by=not_a_real_field", nil), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for an invalid sort_by, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleListShortURLs_PageSizeAndOffsetAgainstTotal(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	owner, _ := d.authStore.CreateUser(ctx, "owner@example.com", true)
+	token, _ := d.sessions.Create(ctx, owner.ID, time.Hour)
+
+	for i := 0; i < 3; i++ {
+		created, err := d.server.shortURLs.Create(ctx, shorturl.CreateInput{DomainID: d.server.domainID, LongURL: "https://example.com/" + string(rune('a'+i)), CreatedBy: owner.ID})
+		if err != nil {
+			t.Fatalf("seed create %d: %v", i, err)
+		}
+		d.permissions.grants[grantKey(created.ID, owner.ID)] = &permission.Grant{UserID: owner.ID, Role: permission.RoleOwner}
+	}
+
+	req := withSessionCookie(httptest.NewRequest(http.MethodGet, "/api/short-urls?limit=2&offset=0", nil), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	var resp shortURLListResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Total != 3 || len(resp.Items) != 2 {
+		t.Fatalf("expected total=3 with 2 items on the first page of limit=2, got %+v", resp)
 	}
 }
 

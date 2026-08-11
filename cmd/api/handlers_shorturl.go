@@ -39,6 +39,7 @@ type shortURLResponse struct {
 	Description string     `json:"description,omitempty"`
 	Status      string     `json:"status"`
 	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
 	// YourRole is the caller's own url_permissions role ("owner",
 	// "editor", "viewer"), or "" when their visibility comes purely from
 	// AdminOverride (system_admin viewing a URL they hold no grant on,
@@ -60,6 +61,7 @@ func toShortURLResponse(su *shorturl.ShortURL, access permission.Access, grant *
 		Description:          su.Description,
 		Status:               string(su.Status),
 		ExpiresAt:            su.ExpiresAt,
+		CreatedAt:            su.CreatedAt,
 		CanEdit:              access.CanEdit,
 		CanDelete:            access.CanDelete,
 		CanManagePermissions: access.CanManagePermissions,
@@ -68,6 +70,21 @@ func toShortURLResponse(su *shorturl.ShortURL, access permission.Access, grant *
 		resp.YourRole = string(grant.Role)
 	}
 	return resp
+}
+
+// shortURLListItemResponse is one row of GET /short-urls (4.1節の一覧表示).
+// It embeds shortURLResponse plus list-only fields; CreatorEmail is a
+// pointer so it's omitted from the JSON entirely for non-admins rather than
+// serialized as "" (登録者メールアドレスは管理者が表示している場合のみ).
+type shortURLListItemResponse struct {
+	shortURLResponse
+	ClickCount   int64   `json:"click_count"`
+	CreatorEmail *string `json:"creator_email,omitempty"`
+}
+
+type shortURLListResponse struct {
+	Items []shortURLListItemResponse `json:"items"`
+	Total int                        `json:"total"`
 }
 
 func (s *server) handleCreateShortURL(w http.ResponseWriter, r *http.Request) {
@@ -115,7 +132,7 @@ func (s *server) handleCreateShortURL(w http.ResponseWriter, r *http.Request) {
 // handleListShortURLs returns the caller's own short URLs (自身が作成/招待
 // された短縮URLの管理のみ、4.1節). A system_admin instead sees every short
 // URL by default (4.1節: 全短縮URLの閲覧は無制限) unless ?scope=mine is
-// given to see just their own.
+// given to see just their own. Supports filter/sort/pagination (4.1節).
 func (s *server) handleListShortURLs(w http.ResponseWriter, r *http.Request) {
 	subject, ok := subjectFromContext(r.Context())
 	if !ok {
@@ -124,19 +141,30 @@ func (s *server) handleListShortURLs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	q := r.URL.Query()
 	page := shorturl.ListPage{
-		Limit:  atoiOrZero(r.URL.Query().Get("limit")),
-		Offset: atoiOrZero(r.URL.Query().Get("offset")),
+		Limit:   atoiOrZero(q.Get("limit")),
+		Offset:  atoiOrZero(q.Get("offset")),
+		Filter:  q.Get("filter"),
+		SortBy:  shorturl.SortField(q.Get("sort_by")),
+		SortDir: shorturl.SortDirection(q.Get("sort_dir")),
 	}
 
+	isAdminView := subject.IsSystemAdmin && q.Get("scope") != "mine"
+
 	var (
-		items []*shorturl.ShortURL
+		items []*shorturl.ListItem
+		total int
 		err   error
 	)
-	if subject.IsSystemAdmin && r.URL.Query().Get("scope") != "mine" {
-		items, err = s.shortURLs.ListAll(ctx, page)
+	if isAdminView {
+		items, total, err = s.shortURLs.ListAll(ctx, page)
 	} else {
-		items, err = s.shortURLs.ListForUser(ctx, subject.UserID, page)
+		items, total, err = s.shortURLs.ListForUser(ctx, subject.UserID, page)
+	}
+	if errors.Is(err, shorturl.ErrInvalidSort) {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 	if err != nil {
 		slog.Error("list short urls failed", "error", err)
@@ -144,18 +172,26 @@ func (s *server) handleListShortURLs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := make([]shortURLResponse, 0, len(items))
-	for _, su := range items {
-		grant, err := s.permissions.FindGrant(ctx, su.ID, subject.UserID)
+	respItems := make([]shortURLListItemResponse, 0, len(items))
+	for _, item := range items {
+		grant, err := s.permissions.FindGrant(ctx, item.ID, subject.UserID)
 		if err != nil {
 			slog.Error("find grant failed while building short url list", "error", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
 		access := permission.Resolve(subject, grant)
-		resp = append(resp, toShortURLResponse(su, access, grant))
+		listItem := shortURLListItemResponse{
+			shortURLResponse: toShortURLResponse(&item.ShortURL, access, grant),
+			ClickCount:       item.ClickCount,
+		}
+		if subject.IsSystemAdmin {
+			email := item.CreatorEmail
+			listItem.CreatorEmail = &email
+		}
+		respItems = append(respItems, listItem)
 	}
-	writeJSON(w, http.StatusOK, resp)
+	writeJSON(w, http.StatusOK, shortURLListResponse{Items: respItems, Total: total})
 }
 
 func (s *server) handleGetShortURL(w http.ResponseWriter, r *http.Request) {

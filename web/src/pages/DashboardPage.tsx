@@ -1,8 +1,14 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError, api } from "../api/client";
-import type { ShortURL } from "../api/types";
+import type {
+	ShortURL,
+	ShortURLListItem,
+	ShortURLListResponse,
+	ShortURLSortField,
+	SortDirection,
+} from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { Header } from "../components/Header";
 
@@ -15,6 +21,18 @@ const ROLE_LABELS: Record<string, string> = {
 	viewer: "閲覧者",
 };
 
+const PAGE_SIZE_OPTIONS = [15, 50, 100] as const;
+const DEFAULT_PAGE_SIZE = 15;
+
+const SORT_COLUMNS: { field: ShortURLSortField; label: string }[] = [
+	{ field: "short_code", label: "短縮URL" },
+	{ field: "long_url", label: "リダイレクト先URL" },
+	{ field: "title", label: "タイトル" },
+	{ field: "created_at", label: "登録日時" },
+	{ field: "click_count", label: "クリック数" },
+	{ field: "creator_email", label: "登録者" },
+];
+
 type EditForm = {
 	long_url: string;
 	title: string;
@@ -22,6 +40,14 @@ type EditForm = {
 };
 
 const emptyEditForm: EditForm = { long_url: "", title: "", description: "" };
+
+function formatDateTime(iso: string) {
+	const d = new Date(iso);
+	if (Number.isNaN(d.getTime())) {
+		return iso;
+	}
+	return d.toLocaleString("ja-JP");
+}
 
 export function DashboardPage() {
 	const { user } = useAuth();
@@ -39,16 +65,82 @@ export function DashboardPage() {
 	const [rowError, setRowError] = useState<string | null>(null);
 	const [pendingId, setPendingId] = useState<string | null>(null);
 
+	const [filterInput, setFilterInput] = useState("");
+	const [filter, setFilter] = useState("");
+	const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE);
+	const [offset, setOffset] = useState(0);
+	const [sortBy, setSortBy] = useState<ShortURLSortField>("created_at");
+	const [sortDir, setSortDir] = useState<SortDirection>("desc");
+
+	// フィルタ入力は300msデバウンスしてから実際のクエリに反映する
+	// (キー入力のたびにAPIを叩かないようにするため)。
+	useEffect(() => {
+		const t = setTimeout(() => {
+			setFilter(filterInput);
+			setOffset(0);
+		}, 300);
+		return () => clearTimeout(t);
+	}, [filterInput]);
+
 	const showScopeToggle = user?.is_system_admin ?? false;
-	const effectiveScopeMine = showScopeToggle ? scopeMine : true;
+	// scope=mine only affects an admin's view server-side (非adminは常に自分の
+	// URLのみ、4.1節) — deriving this from scopeMine alone (rather than
+	// gating on showScopeToggle, which flips once /auth/me resolves) keeps
+	// the query key stable across that async user-load, avoiding a
+	// spurious loading-state flicker on every page load.
+	const effectiveScopeMine = scopeMine;
+	const showCreatorEmail = user?.is_system_admin ?? false;
+
+	const queryKey = [
+		"short-urls",
+		{
+			mine: effectiveScopeMine,
+			limit: pageSize,
+			offset,
+			filter,
+			sortBy,
+			sortDir,
+		},
+	] as const;
 
 	const listQuery = useQuery({
-		queryKey: ["short-urls", { mine: effectiveScopeMine }],
-		queryFn: () =>
-			api.get<ShortURL[]>(
-				effectiveScopeMine ? "/short-urls?scope=mine" : "/short-urls",
-			),
+		queryKey,
+		queryFn: () => {
+			const params = new URLSearchParams({
+				limit: String(pageSize),
+				offset: String(offset),
+				sort_by: sortBy,
+				sort_dir: sortDir,
+			});
+			if (filter) {
+				params.set("filter", filter);
+			}
+			if (effectiveScopeMine) {
+				params.set("scope", "mine");
+			}
+			return api.get<ShortURLListResponse>(`/short-urls?${params}`);
+		},
 	});
+
+	const total = listQuery.data?.total ?? 0;
+	const items = listQuery.data?.items ?? [];
+	const pageStart = total === 0 ? 0 : offset + 1;
+	const pageEnd = Math.min(offset + pageSize, total);
+
+	function toggleSort(field: ShortURLSortField) {
+		if (field === sortBy) {
+			setSortDir(sortDir === "asc" ? "desc" : "asc");
+		} else {
+			setSortBy(field);
+			setSortDir("asc");
+		}
+		setOffset(0);
+	}
+
+	function changePageSize(size: number) {
+		setPageSize(size);
+		setOffset(0);
+	}
 
 	async function handleCreate(e: FormEvent) {
 		e.preventDefault();
@@ -60,9 +152,11 @@ export function DashboardPage() {
 				custom_alias: customAlias || undefined,
 				title: title || undefined,
 			});
-			queryClient.setQueryData<ShortURL[]>(
-				["short-urls", { mine: effectiveScopeMine }],
-				(current) => (current ? [su, ...current] : [su]),
+			const newItem: ShortURLListItem = { ...su, click_count: 0 };
+			queryClient.setQueryData<ShortURLListResponse>(queryKey, (current) =>
+				current
+					? { items: [newItem, ...current.items], total: current.total + 1 }
+					: { items: [newItem], total: 1 },
 			);
 			setLongUrl("");
 			setCustomAlias("");
@@ -76,7 +170,7 @@ export function DashboardPage() {
 		}
 	}
 
-	function startEdit(su: ShortURL) {
+	function startEdit(su: ShortURLListItem) {
 		setRowError(null);
 		setEditingId(su.id);
 		setEditForm({
@@ -103,9 +197,15 @@ export function DashboardPage() {
 				`/short-urls/${editingId}`,
 				editForm,
 			);
-			queryClient.setQueryData<ShortURL[]>(
-				["short-urls", { mine: effectiveScopeMine }],
-				(current) => current?.map((su) => (su.id === editingId ? updated : su)),
+			queryClient.setQueryData<ShortURLListResponse>(queryKey, (current) =>
+				current
+					? {
+							...current,
+							items: current.items.map((su) =>
+								su.id === editingId ? { ...su, ...updated } : su,
+							),
+						}
+					: current,
 			);
 			cancelEdit();
 		} catch (err) {
@@ -115,7 +215,7 @@ export function DashboardPage() {
 		}
 	}
 
-	async function handleDelete(su: ShortURL) {
+	async function handleDelete(su: ShortURLListItem) {
 		if (!window.confirm(`「${su.short_code}」を削除しますか?`)) {
 			return;
 		}
@@ -123,9 +223,13 @@ export function DashboardPage() {
 		setPendingId(su.id);
 		try {
 			await api.delete(`/short-urls/${su.id}`);
-			queryClient.setQueryData<ShortURL[]>(
-				["short-urls", { mine: effectiveScopeMine }],
-				(current) => current?.filter((item) => item.id !== su.id),
+			queryClient.setQueryData<ShortURLListResponse>(queryKey, (current) =>
+				current
+					? {
+							items: current.items.filter((item) => item.id !== su.id),
+							total: current.total - 1,
+						}
+					: current,
 			);
 		} catch (err) {
 			setRowError(err instanceof ApiError ? err.message : "削除に失敗しました");
@@ -137,7 +241,7 @@ export function DashboardPage() {
 	return (
 		<div>
 			<Header />
-			<div className="mx-auto max-w-3xl px-4 py-8">
+			<div className="mx-auto max-w-5xl px-4 py-8">
 				<h1 className="mb-6 text-2xl font-semibold">短縮URLを作成</h1>
 				<form onSubmit={handleCreate} className="mb-10 flex flex-col gap-4">
 					<label className="flex flex-col gap-1">
@@ -251,7 +355,7 @@ export function DashboardPage() {
 					</form>
 				)}
 
-				<div className="mb-3 flex items-center justify-between">
+				<div className="mb-3 flex flex-wrap items-center justify-between gap-3">
 					<h2 className="text-lg font-medium">短縮URL一覧</h2>
 					{showScopeToggle && (
 						<label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
@@ -265,78 +369,168 @@ export function DashboardPage() {
 					)}
 				</div>
 
+				<div className="mb-4 flex flex-wrap items-center gap-4">
+					<label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
+						フィルタ
+						<input
+							type="text"
+							value={filterInput}
+							onChange={(e) => setFilterInput(e.target.value)}
+							placeholder="短縮URL・URL・タイトル・登録者で検索"
+							className="rounded border border-gray-300 px-3 py-1.5 dark:border-gray-600 dark:bg-gray-800"
+						/>
+					</label>
+					<label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
+						表示件数
+						<select
+							value={pageSize}
+							onChange={(e) => changePageSize(Number(e.target.value))}
+							className="rounded border border-gray-300 px-2 py-1.5 dark:border-gray-600 dark:bg-gray-800"
+						>
+							{PAGE_SIZE_OPTIONS.map((size) => (
+								<option key={size} value={size}>
+									{size}件
+								</option>
+							))}
+						</select>
+					</label>
+				</div>
+
 				{rowError && <p className="mb-4 text-sm text-red-600">{rowError}</p>}
 				{listQuery.isLoading && <p>読み込み中…</p>}
 				{listQuery.isError && (
 					<p className="text-sm text-red-600">一覧の取得に失敗しました</p>
 				)}
-				{listQuery.data && listQuery.data.length === 0 && (
+				{listQuery.data && items.length === 0 && (
 					<p className="text-gray-500">短縮URLはまだありません。</p>
 				)}
 
-				<ul className="flex flex-col gap-3">
-					{listQuery.data?.map((su) => {
-						const busy = pendingId === su.id;
-						return (
-							<li
-								key={su.id}
-								className="rounded border border-gray-200 p-4 dark:border-gray-700"
-							>
-								<div className="flex items-start justify-between gap-4">
-									<div className="min-w-0">
-										<a
-											href={`${REDIRECT_BASE_URL}/${su.short_code}`}
-											target="_blank"
-											rel="noreferrer"
-											className="font-mono text-indigo-600 underline"
+				{items.length > 0 && (
+					<div className="overflow-x-auto">
+						<table className="w-full min-w-[720px] border-collapse text-sm">
+							<thead>
+								<tr className="border-b border-gray-200 text-left dark:border-gray-700">
+									{SORT_COLUMNS.filter(
+										(col) => col.field !== "creator_email" || showCreatorEmail,
+									).map((col) => (
+										<th key={col.field} className="px-2 py-2 font-medium">
+											<button
+												type="button"
+												onClick={() => toggleSort(col.field)}
+												className="flex items-center gap-1"
+											>
+												{col.label}
+												{sortBy === col.field && (
+													<span aria-hidden="true">
+														{sortDir === "asc" ? "▲" : "▼"}
+													</span>
+												)}
+											</button>
+										</th>
+									))}
+									<th className="px-2 py-2 font-medium">操作</th>
+								</tr>
+							</thead>
+							<tbody>
+								{items.map((su) => {
+									const busy = pendingId === su.id;
+									return (
+										<tr
+											key={su.id}
+											className="border-b border-gray-100 align-top dark:border-gray-800"
 										>
-											{REDIRECT_BASE_URL}/{su.short_code}
-										</a>
-										<p className="truncate text-sm text-gray-500">
-											→ {su.long_url}
-										</p>
-										<p className="mt-1 text-xs text-gray-500">
-											{su.status === "disabled" ? "無効化済み" : "有効"}
-											{su.your_role
-												? ` ・ ${ROLE_LABELS[su.your_role] ?? su.your_role}`
-												: " ・ 閲覧のみ(管理者権限)"}
-										</p>
-									</div>
-									<div className="flex shrink-0 gap-2">
-										{su.can_edit && (
-											<button
-												type="button"
-												disabled={busy}
-												onClick={() => startEdit(su)}
-												className="rounded border border-gray-300 px-2 py-1 text-xs disabled:opacity-50 dark:border-gray-600"
-											>
-												編集
-											</button>
-										)}
-										{su.can_manage_permissions && (
-											<Link
-												to={`/short-urls/${su.id}/permissions`}
-												className="rounded border border-gray-300 px-2 py-1 text-xs dark:border-gray-600"
-											>
-												権限管理
-											</Link>
-										)}
-										{su.can_delete && (
-											<button
-												type="button"
-												disabled={busy}
-												onClick={() => handleDelete(su)}
-												className="rounded border border-gray-300 px-2 py-1 text-xs disabled:opacity-50 dark:border-gray-600"
-											>
-												削除
-											</button>
-										)}
-									</div>
-								</div>
-							</li>
-						);
-					})}
-				</ul>
+											<td className="px-2 py-3">
+												<a
+													href={`${REDIRECT_BASE_URL}/${su.short_code}`}
+													target="_blank"
+													rel="noreferrer"
+													className="font-mono text-indigo-600 underline"
+												>
+													{su.short_code}
+												</a>
+												<p className="mt-1 text-xs text-gray-500">
+													{su.status === "disabled" ? "無効化済み" : "有効"}
+													{su.your_role
+														? ` ・ ${ROLE_LABELS[su.your_role] ?? su.your_role}`
+														: " ・ 閲覧のみ(管理者権限)"}
+												</p>
+											</td>
+											<td className="max-w-xs truncate px-2 py-3">
+												{su.long_url}
+											</td>
+											<td className="px-2 py-3">{su.title || "-"}</td>
+											<td className="whitespace-nowrap px-2 py-3">
+												{formatDateTime(su.created_at)}
+											</td>
+											<td className="px-2 py-3">{su.click_count}</td>
+											{showCreatorEmail && (
+												<td className="px-2 py-3">{su.creator_email ?? "-"}</td>
+											)}
+											<td className="px-2 py-3">
+												<div className="flex gap-2">
+													{su.can_edit && (
+														<button
+															type="button"
+															disabled={busy}
+															onClick={() => startEdit(su)}
+															className="rounded border border-gray-300 px-2 py-1 text-xs disabled:opacity-50 dark:border-gray-600"
+														>
+															編集
+														</button>
+													)}
+													{su.can_manage_permissions && (
+														<Link
+															to={`/short-urls/${su.id}/permissions`}
+															className="rounded border border-gray-300 px-2 py-1 text-xs dark:border-gray-600"
+														>
+															権限管理
+														</Link>
+													)}
+													{su.can_delete && (
+														<button
+															type="button"
+															disabled={busy}
+															onClick={() => handleDelete(su)}
+															className="rounded border border-gray-300 px-2 py-1 text-xs disabled:opacity-50 dark:border-gray-600"
+														>
+															削除
+														</button>
+													)}
+												</div>
+											</td>
+										</tr>
+									);
+								})}
+							</tbody>
+						</table>
+					</div>
+				)}
+
+				{total > 0 && (
+					<div className="mt-4 flex items-center justify-between text-sm text-gray-600 dark:text-gray-300">
+						<span>
+							{pageStart}–{pageEnd} / {total}件
+						</span>
+						<div className="flex gap-2">
+							<button
+								type="button"
+								disabled={offset === 0}
+								onClick={() => setOffset(Math.max(0, offset - pageSize))}
+								className="rounded border border-gray-300 px-3 py-1 disabled:opacity-50 dark:border-gray-600"
+							>
+								前へ
+							</button>
+							<button
+								type="button"
+								disabled={offset + pageSize >= total}
+								onClick={() => setOffset(offset + pageSize)}
+								className="rounded border border-gray-300 px-3 py-1 disabled:opacity-50 dark:border-gray-600"
+							>
+								次へ
+							</button>
+						</div>
+					</div>
+				)}
 			</div>
 		</div>
 	);

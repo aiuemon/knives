@@ -44,27 +44,27 @@ func (s *fakeStore) FindByID(_ context.Context, id uuid.UUID) (*ShortURL, error)
 	return &su, nil
 }
 
-func (s *fakeStore) ListForUser(_ context.Context, userID uuid.UUID, page ListPage) ([]*ShortURL, error) {
-	var result []*ShortURL
+func (s *fakeStore) ListForUser(_ context.Context, userID uuid.UUID, page ListPage) ([]*ListItem, int, error) {
+	var result []*ListItem
 	for _, su := range s.byID {
 		if su.CreatedBy == userID {
 			cp := su
-			result = append(result, &cp)
+			result = append(result, &ListItem{ShortURL: cp})
 		}
 	}
-	return paginate(result, page), nil
+	return paginate(result, page), len(result), nil
 }
 
-func (s *fakeStore) ListAll(_ context.Context, page ListPage) ([]*ShortURL, error) {
-	var result []*ShortURL
+func (s *fakeStore) ListAll(_ context.Context, page ListPage) ([]*ListItem, int, error) {
+	var result []*ListItem
 	for _, su := range s.byID {
 		cp := su
-		result = append(result, &cp)
+		result = append(result, &ListItem{ShortURL: cp})
 	}
-	return paginate(result, page), nil
+	return paginate(result, page), len(result), nil
 }
 
-func paginate(all []*ShortURL, page ListPage) []*ShortURL {
+func paginate(all []*ListItem, page ListPage) []*ListItem {
 	if page.Offset >= len(all) {
 		return nil
 	}
@@ -301,9 +301,12 @@ func TestService_ListForUser_OnlyReturnsThatUsersURLs(t *testing.T) {
 		t.Fatalf("Create B: %v", err)
 	}
 
-	listA, err := svc.ListForUser(ctx, userA, ListPage{})
+	listA, total, err := svc.ListForUser(ctx, userA, ListPage{})
 	if err != nil {
 		t.Fatalf("ListForUser: %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("expected total 1, got %d", total)
 	}
 	if len(listA) != 1 || listA[0].CreatedBy != userA {
 		t.Fatalf("expected exactly userA's own URL, got %+v", listA)
@@ -322,9 +325,12 @@ func TestService_ListAll_ReturnsEveryURL(t *testing.T) {
 		t.Fatalf("Create B: %v", err)
 	}
 
-	all, err := svc.ListAll(ctx, ListPage{})
+	all, total, err := svc.ListAll(ctx, ListPage{})
 	if err != nil {
 		t.Fatalf("ListAll: %v", err)
+	}
+	if total != 2 {
+		t.Fatalf("expected total 2, got %d", total)
 	}
 	if len(all) != 2 {
 		t.Fatalf("expected 2 URLs, got %d", len(all))

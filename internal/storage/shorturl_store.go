@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -50,7 +51,7 @@ func (s *ShortURLStore) CreateShortURL(ctx context.Context, in shorturl.ShortURL
 
 	q := New(tx)
 
-	id, err := q.InsertShortURL(ctx, InsertShortURLParams{
+	inserted, err := q.InsertShortURL(ctx, InsertShortURLParams{
 		DomainID:    in.DomainID,
 		ShortCode:   in.ShortCode,
 		LongUrl:     in.LongURL,
@@ -70,7 +71,7 @@ func (s *ShortURLStore) CreateShortURL(ctx context.Context, in shorturl.ShortURL
 
 	// 作成者を自動的にownerとする(4.2節)。
 	if err := q.InsertURLPermission(ctx, InsertURLPermissionParams{
-		ShortUrlID: id,
+		ShortUrlID: inserted.ID,
 		UserID:     in.CreatedBy,
 		Role:       UrlPermissionRoleOwner,
 		GrantedBy:  in.CreatedBy,
@@ -83,7 +84,8 @@ func (s *ShortURLStore) CreateShortURL(ctx context.Context, in shorturl.ShortURL
 	}
 
 	result := in
-	result.ID = id
+	result.ID = inserted.ID
+	result.CreatedAt = inserted.CreatedAt.Time
 	return &result, nil
 }
 
@@ -98,27 +100,127 @@ func (s *ShortURLStore) FindByID(ctx context.Context, id uuid.UUID) (*shorturl.S
 	return toDomainShortURL(row), nil
 }
 
-func (s *ShortURLStore) ListForUser(ctx context.Context, userID uuid.UUID, page shorturl.ListPage) ([]*shorturl.ShortURL, error) {
-	rows, err := New(s.pool).ListShortURLsForUser(ctx, ListShortURLsForUserParams{
-		UserID: userID,
-		Limit:  int32(page.Limit),
-		Offset: int32(page.Offset),
-	})
-	if err != nil {
-		return nil, err
-	}
-	return toDomainShortURLs(rows), nil
+func (s *ShortURLStore) ListForUser(ctx context.Context, userID uuid.UUID, page shorturl.ListPage) ([]*shorturl.ListItem, int, error) {
+	return s.listShortURLs(ctx, &userID, page)
 }
 
-func (s *ShortURLStore) ListAll(ctx context.Context, page shorturl.ListPage) ([]*shorturl.ShortURL, error) {
-	rows, err := New(s.pool).ListAllShortURLs(ctx, ListAllShortURLsParams{
-		Limit:  int32(page.Limit),
-		Offset: int32(page.Offset),
-	})
-	if err != nil {
-		return nil, err
+func (s *ShortURLStore) ListAll(ctx context.Context, page shorturl.ListPage) ([]*shorturl.ListItem, int, error) {
+	return s.listShortURLs(ctx, nil, page)
+}
+
+// shortURLSortColumns whitelists ListPage.SortBy -> the SQL expression it
+// maps to. listShortURLs interpolates the selected value directly into the
+// query text (bind parameters can't parameterize identifiers) — safe only
+// because every value here is a fixed literal from this map, never
+// attacker- or even caller-influenced text. Callers MUST have already
+// validated page.SortBy via ListPage.normalize before reaching here;
+// listShortURLs falls back to created_at for anything not in this map as a
+// last-resort safety net, not as a substitute for that validation.
+var shortURLSortColumns = map[shorturl.SortField]string{
+	shorturl.SortByShortCode:    "su.short_code",
+	shorturl.SortByLongURL:      "su.long_url",
+	shorturl.SortByTitle:        "su.title",
+	shorturl.SortByCreatedAt:    "su.created_at",
+	shorturl.SortByClickCount:   "click_count",
+	shorturl.SortByCreatorEmail: "creator_email",
+}
+
+// listShortURLs backs both ListForUser (userID != nil) and ListAll
+// (userID == nil). It's hand-written SQL rather than a sqlc query because
+// the listing needs a caller-selected ORDER BY column (4.1節: 表示内容の
+// どの項目でもソート可能) — column names can't be bind parameters, so this
+// builds the query text from the whitelist above plus a fixed ASC/DESC
+// literal, with every actual value (filter text, user id, limit, offset)
+// still passed as a real parameter.
+func (s *ShortURLStore) listShortURLs(ctx context.Context, userID *uuid.UUID, page shorturl.ListPage) ([]*shorturl.ListItem, int, error) {
+	sortColumn, ok := shortURLSortColumns[page.SortBy]
+	if !ok {
+		sortColumn = "su.created_at"
 	}
-	return toDomainShortURLs(rows), nil
+	direction := "DESC"
+	if page.SortDir == shorturl.SortAsc {
+		direction = "ASC"
+	}
+
+	var args []any
+	bind := func(v any) string {
+		args = append(args, v)
+		return fmt.Sprintf("$%d", len(args))
+	}
+
+	var joinClause, userFilterClause string
+	if userID != nil {
+		joinClause = "JOIN url_permissions up ON up.short_url_id = su.id"
+		userFilterClause = "up.user_id = " + bind(*userID) + " AND "
+	}
+
+	filterParam := bind(page.Filter)
+	limitParam := bind(page.Limit)
+	offsetParam := bind(page.Offset)
+
+	query := fmt.Sprintf(`
+		SELECT su.id, su.domain_id, su.short_code, su.long_url, su.title, su.description,
+		       su.created_by, su.status, su.expires_at, su.source, su.created_at,
+		       u.email AS creator_email,
+		       COALESCE(cs.total_clicks, 0) AS click_count,
+		       COUNT(*) OVER() AS total_count
+		FROM short_urls su
+		%s
+		JOIN users u ON u.id = su.created_by
+		LEFT JOIN (
+			SELECT short_url_id, SUM(click_count) AS total_clicks
+			FROM click_stats_daily
+			GROUP BY short_url_id
+		) cs ON cs.short_url_id = su.id
+		WHERE %s (%s = '' OR su.short_code ILIKE '%%' || %s || '%%' OR su.long_url ILIKE '%%' || %s || '%%' OR su.title ILIKE '%%' || %s || '%%' OR u.email ILIKE '%%' || %s || '%%')
+		ORDER BY %s %s NULLS LAST
+		LIMIT %s OFFSET %s
+	`, joinClause, userFilterClause, filterParam, filterParam, filterParam, filterParam, filterParam, sortColumn, direction, limitParam, offsetParam)
+
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var (
+		items []*shorturl.ListItem
+		total int
+	)
+	for rows.Next() {
+		var (
+			su           shorturl.ShortURL
+			title        pgtype.Text
+			description  pgtype.Text
+			status       string
+			expiresAt    pgtype.Timestamptz
+			source       string
+			createdAt    pgtype.Timestamptz
+			creatorEmail string
+			clickCount   int64
+		)
+		if err := rows.Scan(
+			&su.ID, &su.DomainID, &su.ShortCode, &su.LongURL, &title, &description,
+			&su.CreatedBy, &status, &expiresAt, &source, &createdAt,
+			&creatorEmail, &clickCount, &total,
+		); err != nil {
+			return nil, 0, err
+		}
+		su.Title = title.String
+		su.Description = description.String
+		su.Status = shorturl.Status(status)
+		su.Source = shorturl.Source(source)
+		su.CreatedAt = createdAt.Time
+		if expiresAt.Valid {
+			t := expiresAt.Time
+			su.ExpiresAt = &t
+		}
+		items = append(items, &shorturl.ListItem{ShortURL: su, CreatorEmail: creatorEmail, ClickCount: clickCount})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	return items, total, nil
 }
 
 func (s *ShortURLStore) UpdateFields(ctx context.Context, id uuid.UUID, in shorturl.UpdateInput) (*shorturl.ShortURL, error) {
@@ -168,6 +270,7 @@ func toDomainShortURL(row *ShortUrl) *shorturl.ShortURL {
 		Status:      shorturl.Status(row.Status),
 		ExpiresAt:   expiresAt,
 		Source:      shorturl.Source(row.Source),
+		CreatedAt:   row.CreatedAt.Time,
 	}
 }
 

@@ -32,6 +32,12 @@ var (
 	// code on it; a custom alias collision is surfaced as ErrAliasTaken
 	// instead, since there is nothing else to retry with.
 	ErrCodeCollision = errors.New("shorturl: short_code collision")
+
+	// ErrInvalidSort is returned by List/ListAll when ListPage.SortBy or
+	// SortDir is set to something outside the whitelisted values — never
+	// interpolated into SQL unvalidated (see internal/storage's
+	// ShortURLStore, which relies on this having already been checked).
+	ErrInvalidSort = errors.New("shorturl: invalid sort_by or sort_dir")
 )
 
 type Status string
@@ -60,6 +66,17 @@ type ShortURL struct {
 	Status      Status
 	ExpiresAt   *time.Time
 	Source      Source
+	CreatedAt   time.Time
+}
+
+// ListItem is one row of a short URL listing (GET /short-urls, 4.1節):
+// ShortURL's own fields plus data that's only meaningful in list context —
+// who created it and its total click count — joined in the same query for
+// efficiency rather than N+1'd per row.
+type ListItem struct {
+	ShortURL
+	CreatorEmail string
+	ClickCount   int64
 }
 
 // CreateInput is the caller-supplied part of creating a short URL.
@@ -84,21 +101,78 @@ type UpdateInput struct {
 	ExpiresAt   *time.Time
 }
 
-// ListPage bounds how many rows List/ListAll return in one call, so an
-// admin's "list every short URL" can't return an unbounded result set.
+// SortField is the whitelist of columns a listing may be sorted by —
+// exactly the fields the list view displays. Never trust a caller-supplied
+// value as one of these without checking Valid() first; internal/storage
+// interpolates it directly into SQL as an identifier (bind parameters
+// can't parameterize column names), so an unvalidated value would be a SQL
+// injection vector.
+type SortField string
+
+const (
+	SortByShortCode    SortField = "short_code"
+	SortByLongURL      SortField = "long_url"
+	SortByTitle        SortField = "title"
+	SortByCreatedAt    SortField = "created_at"
+	SortByClickCount   SortField = "click_count"
+	SortByCreatorEmail SortField = "creator_email"
+)
+
+func (f SortField) Valid() bool {
+	switch f {
+	case SortByShortCode, SortByLongURL, SortByTitle, SortByCreatedAt, SortByClickCount, SortByCreatorEmail:
+		return true
+	}
+	return false
+}
+
+type SortDirection string
+
+const (
+	SortAsc  SortDirection = "asc"
+	SortDesc SortDirection = "desc"
+)
+
+func (d SortDirection) Valid() bool {
+	return d == SortAsc || d == SortDesc
+}
+
+// ListPage bounds how many rows List/ListAll return in one call (so an
+// admin's "list every short URL" can't return an unbounded result set),
+// and carries the free-text filter and sort order for the listing.
 type ListPage struct {
 	Limit  int
 	Offset int
+	// Filter, when non-empty, restricts results to rows whose short_code,
+	// long_url, title, or creator email contains it (case-insensitive).
+	Filter  string
+	SortBy  SortField
+	SortDir SortDirection
 }
 
-func (p ListPage) normalize() ListPage {
+// normalize fills in defaults and validates SortBy/SortDir. It never
+// silently corrects an invalid sort — a typo'd field is a client bug worth
+// surfacing (ErrInvalidSort), not something to paper over, since the
+// caller's UI presumably meant to sort by something specific.
+func (p ListPage) normalize() (ListPage, error) {
 	if p.Limit <= 0 || p.Limit > 200 {
 		p.Limit = 50
 	}
 	if p.Offset < 0 {
 		p.Offset = 0
 	}
-	return p
+	p.Filter = strings.TrimSpace(p.Filter)
+	if p.SortBy == "" {
+		p.SortBy = SortByCreatedAt
+	} else if !p.SortBy.Valid() {
+		return ListPage{}, ErrInvalidSort
+	}
+	if p.SortDir == "" {
+		p.SortDir = SortDesc
+	} else if !p.SortDir.Valid() {
+		return ListPage{}, ErrInvalidSort
+	}
+	return p, nil
 }
 
 // Store is the persistence port Service depends on.
@@ -121,12 +195,14 @@ type Store interface {
 	FindByID(ctx context.Context, id uuid.UUID) (*ShortURL, error)
 
 	// ListForUser returns short URLs userID holds any url_permissions
-	// grant on (自身が作成/招待された短縮URLの管理のみ、4.1節), newest first.
-	ListForUser(ctx context.Context, userID uuid.UUID, page ListPage) ([]*ShortURL, error)
+	// grant on (自身が作成/招待された短縮URLの管理のみ、4.1節), plus the
+	// total row count ignoring Limit/Offset (for pager UIs). page's
+	// SortBy/SortDir are assumed already validated (ListPage.normalize).
+	ListForUser(ctx context.Context, userID uuid.UUID, page ListPage) (items []*ListItem, total int, err error)
 
-	// ListAll returns every short URL, newest first — for system_admin's
-	// unrestricted view (4.1節).
-	ListAll(ctx context.Context, page ListPage) ([]*ShortURL, error)
+	// ListAll returns every short URL — for system_admin's unrestricted
+	// view (4.1節) — plus the total row count ignoring Limit/Offset.
+	ListAll(ctx context.Context, page ListPage) (items []*ListItem, total int, err error)
 
 	// UpdateFields replaces long_url/title/description/expires_at.
 	// Returns ErrNotFound if id doesn't exist.
@@ -207,14 +283,22 @@ func (c *Service) insert(ctx context.Context, in CreateInput, longURL, code stri
 }
 
 // ListForUser returns the short URLs userID holds any grant on.
-func (c *Service) ListForUser(ctx context.Context, userID uuid.UUID, page ListPage) ([]*ShortURL, error) {
-	return c.Store.ListForUser(ctx, userID, page.normalize())
+func (c *Service) ListForUser(ctx context.Context, userID uuid.UUID, page ListPage) ([]*ListItem, int, error) {
+	normalized, err := page.normalize()
+	if err != nil {
+		return nil, 0, err
+	}
+	return c.Store.ListForUser(ctx, userID, normalized)
 }
 
 // ListAll returns every short URL — callers must have already established
 // the caller is a system_admin (4.1節); Service does not re-check authorization.
-func (c *Service) ListAll(ctx context.Context, page ListPage) ([]*ShortURL, error) {
-	return c.Store.ListAll(ctx, page.normalize())
+func (c *Service) ListAll(ctx context.Context, page ListPage) ([]*ListItem, int, error) {
+	normalized, err := page.normalize()
+	if err != nil {
+		return nil, 0, err
+	}
+	return c.Store.ListAll(ctx, normalized)
 }
 
 // Update replaces long_url/title/description/expires_at. Callers must have

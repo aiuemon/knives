@@ -3,7 +3,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ShortURL } from "../api/types";
+import type { ShortURLListItem, ShortURLListResponse } from "../api/types";
 import { AuthProvider } from "../auth/AuthContext";
 import { DashboardPage } from "./DashboardPage";
 
@@ -18,26 +18,30 @@ const adminUser = {
 	is_system_admin: true,
 };
 
-const ownedURL: ShortURL = {
+const ownedURL: ShortURLListItem = {
 	id: "url-1",
 	short_code: "abc123",
 	long_url: "https://example.com/owned",
 	status: "active",
+	created_at: "2026-01-01T00:00:00Z",
 	your_role: "owner",
 	can_edit: true,
 	can_delete: true,
 	can_manage_permissions: true,
+	click_count: 3,
 };
 
-const viewOnlyURL: ShortURL = {
+const viewOnlyURL: ShortURLListItem = {
 	id: "url-2",
 	short_code: "def456",
 	long_url: "https://example.com/view-only",
 	status: "active",
+	created_at: "2026-01-02T00:00:00Z",
 	your_role: "",
 	can_edit: false,
 	can_delete: false,
 	can_manage_permissions: false,
+	click_count: 0,
 };
 
 function jsonResponse(body: unknown, status = 200) {
@@ -49,7 +53,7 @@ function jsonResponse(body: unknown, status = 200) {
 
 function renderPage(
 	me: typeof regularUser,
-	shortUrls: ShortURL[],
+	shortUrls: ShortURLListItem[],
 	extraFetch?: (url: string, init?: RequestInit) => Response | undefined,
 ) {
 	const queryClient = new QueryClient({
@@ -69,7 +73,11 @@ function renderPage(
 				url.includes("/api/short-urls") &&
 				(!init || init.method === undefined)
 			) {
-				return jsonResponse(shortUrls);
+				const resp: ShortURLListResponse = {
+					items: shortUrls,
+					total: shortUrls.length,
+				};
+				return jsonResponse(resp);
 			}
 			if (url.endsWith("/api/short-urls") && init?.method === "POST") {
 				const body = JSON.parse(init.body as string);
@@ -79,6 +87,7 @@ function renderPage(
 						short_code: "newcode",
 						long_url: body.long_url,
 						status: "active",
+						created_at: "2026-01-03T00:00:00Z",
 						your_role: "owner",
 						can_edit: true,
 						can_delete: true,
@@ -110,7 +119,7 @@ describe("DashboardPage", () => {
 	it("lists the user's short URLs", async () => {
 		renderPage(regularUser, [ownedURL]);
 		expect(await screen.findByText(/abc123/)).toBeInTheDocument();
-		expect(screen.getByText("→ https://example.com/owned")).toBeInTheDocument();
+		expect(screen.getByText("https://example.com/owned")).toBeInTheDocument();
 	});
 
 	it("only shows edit/delete/permissions actions the user is allowed to take", async () => {
@@ -138,6 +147,21 @@ describe("DashboardPage", () => {
 		renderPage(adminUser, [ownedURL]);
 		await screen.findByText(/abc123/);
 		expect(screen.getByText("自分のURLのみ表示")).toBeInTheDocument();
+	});
+
+	it("shows the creator email column only for system_admin", async () => {
+		renderPage(regularUser, [
+			{ ...ownedURL, creator_email: "owner@example.com" },
+		]);
+		await screen.findByText(/abc123/);
+		expect(screen.queryByText("owner@example.com")).not.toBeInTheDocument();
+
+		cleanup();
+		renderPage(adminUser, [
+			{ ...ownedURL, creator_email: "owner@example.com" },
+		]);
+		await screen.findByText(/abc123/);
+		expect(screen.getByText("owner@example.com")).toBeInTheDocument();
 	});
 
 	it("submits the create form and prepends the result to the list", async () => {
@@ -181,7 +205,7 @@ describe("DashboardPage", () => {
 
 		await waitFor(() =>
 			expect(
-				screen.getByText("→ https://example.com/updated"),
+				screen.getByText("https://example.com/updated"),
 			).toBeInTheDocument(),
 		);
 	});
@@ -201,6 +225,20 @@ describe("DashboardPage", () => {
 
 		await waitFor(() =>
 			expect(screen.queryByText(/abc123/)).not.toBeInTheDocument(),
+		);
+	});
+
+	it("toggles sort direction when a column header is clicked", async () => {
+		renderPage(regularUser, [ownedURL]);
+		await screen.findByText(/abc123/);
+
+		const user = userEvent.setup();
+		await user.click(screen.getByRole("button", { name: "クリック数" }));
+
+		await waitFor(() =>
+			expect(
+				screen.getByRole("button", { name: /クリック数/ }),
+			).toHaveTextContent("▲"),
 		);
 	});
 });

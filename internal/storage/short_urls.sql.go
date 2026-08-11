@@ -67,7 +67,7 @@ func (q *Queries) FindShortURLByID(ctx context.Context, id uuid.UUID) (*ShortUrl
 const insertShortURL = `-- name: InsertShortURL :one
 INSERT INTO short_urls (domain_id, short_code, long_url, title, description, created_by, status, expires_at, source)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-RETURNING id
+RETURNING id, created_at
 `
 
 type InsertShortURLParams struct {
@@ -82,7 +82,12 @@ type InsertShortURLParams struct {
 	Source      ShortUrlSource     `json:"source"`
 }
 
-func (q *Queries) InsertShortURL(ctx context.Context, arg InsertShortURLParams) (uuid.UUID, error) {
+type InsertShortURLRow struct {
+	ID        uuid.UUID          `json:"id"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) InsertShortURL(ctx context.Context, arg InsertShortURLParams) (*InsertShortURLRow, error) {
 	row := q.db.QueryRow(ctx, insertShortURL,
 		arg.DomainID,
 		arg.ShortCode,
@@ -94,102 +99,9 @@ func (q *Queries) InsertShortURL(ctx context.Context, arg InsertShortURLParams) 
 		arg.ExpiresAt,
 		arg.Source,
 	)
-	var id uuid.UUID
-	err := row.Scan(&id)
-	return id, err
-}
-
-const listAllShortURLs = `-- name: ListAllShortURLs :many
-SELECT id, domain_id, short_code, long_url, title, description, created_by, status, expires_at, source, created_at, updated_at
-FROM short_urls
-ORDER BY created_at DESC
-LIMIT $1 OFFSET $2
-`
-
-type ListAllShortURLsParams struct {
-	Limit  int32 `json:"limit"`
-	Offset int32 `json:"offset"`
-}
-
-func (q *Queries) ListAllShortURLs(ctx context.Context, arg ListAllShortURLsParams) ([]*ShortUrl, error) {
-	rows, err := q.db.Query(ctx, listAllShortURLs, arg.Limit, arg.Offset)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []*ShortUrl
-	for rows.Next() {
-		var i ShortUrl
-		if err := rows.Scan(
-			&i.ID,
-			&i.DomainID,
-			&i.ShortCode,
-			&i.LongUrl,
-			&i.Title,
-			&i.Description,
-			&i.CreatedBy,
-			&i.Status,
-			&i.ExpiresAt,
-			&i.Source,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, &i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listShortURLsForUser = `-- name: ListShortURLsForUser :many
-SELECT su.id, su.domain_id, su.short_code, su.long_url, su.title, su.description, su.created_by, su.status, su.expires_at, su.source, su.created_at, su.updated_at
-FROM short_urls su
-JOIN url_permissions up ON up.short_url_id = su.id
-WHERE up.user_id = $1
-ORDER BY su.created_at DESC
-LIMIT $2 OFFSET $3
-`
-
-type ListShortURLsForUserParams struct {
-	UserID uuid.UUID `json:"user_id"`
-	Limit  int32     `json:"limit"`
-	Offset int32     `json:"offset"`
-}
-
-func (q *Queries) ListShortURLsForUser(ctx context.Context, arg ListShortURLsForUserParams) ([]*ShortUrl, error) {
-	rows, err := q.db.Query(ctx, listShortURLsForUser, arg.UserID, arg.Limit, arg.Offset)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []*ShortUrl
-	for rows.Next() {
-		var i ShortUrl
-		if err := rows.Scan(
-			&i.ID,
-			&i.DomainID,
-			&i.ShortCode,
-			&i.LongUrl,
-			&i.Title,
-			&i.Description,
-			&i.CreatedBy,
-			&i.Status,
-			&i.ExpiresAt,
-			&i.Source,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, &i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+	var i InsertShortURLRow
+	err := row.Scan(&i.ID, &i.CreatedAt)
+	return &i, err
 }
 
 const setShortURLStatus = `-- name: SetShortURLStatus :exec
@@ -209,6 +121,7 @@ func (q *Queries) SetShortURLStatus(ctx context.Context, arg SetShortURLStatusPa
 }
 
 const updateShortURLFields = `-- name: UpdateShortURLFields :one
+
 UPDATE short_urls
 SET long_url = $2, title = $3, description = $4, expires_at = $5, updated_at = now()
 WHERE id = $1
@@ -223,6 +136,10 @@ type UpdateShortURLFieldsParams struct {
 	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
 }
 
+// ListShortURLsForUser/ListAllShortURLs (filter+sort+pagination+total count,
+// 4.1節) are hand-written in shorturl_store.go instead of here: sqlc can't
+// parameterize a dynamic ORDER BY column, which this listing needs to let
+// every displayed field be sortable.
 func (q *Queries) UpdateShortURLFields(ctx context.Context, arg UpdateShortURLFieldsParams) (*ShortUrl, error) {
 	row := q.db.QueryRow(ctx, updateShortURLFields,
 		arg.ID,

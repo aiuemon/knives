@@ -9,26 +9,17 @@ WHERE domain_id = $1
 -- name: InsertShortURL :one
 INSERT INTO short_urls (domain_id, short_code, long_url, title, description, created_by, status, expires_at, source)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-RETURNING id;
+RETURNING id, created_at;
 
 -- name: FindShortURLByID :one
 SELECT id, domain_id, short_code, long_url, title, description, created_by, status, expires_at, source, created_at, updated_at
 FROM short_urls
 WHERE id = $1;
 
--- name: ListShortURLsForUser :many
-SELECT su.id, su.domain_id, su.short_code, su.long_url, su.title, su.description, su.created_by, su.status, su.expires_at, su.source, su.created_at, su.updated_at
-FROM short_urls su
-JOIN url_permissions up ON up.short_url_id = su.id
-WHERE up.user_id = $1
-ORDER BY su.created_at DESC
-LIMIT $2 OFFSET $3;
-
--- name: ListAllShortURLs :many
-SELECT id, domain_id, short_code, long_url, title, description, created_by, status, expires_at, source, created_at, updated_at
-FROM short_urls
-ORDER BY created_at DESC
-LIMIT $1 OFFSET $2;
+-- ListShortURLsForUser/ListAllShortURLs (filter+sort+pagination+total count,
+-- 4.1節) are hand-written in shorturl_store.go instead of here: sqlc can't
+-- parameterize a dynamic ORDER BY column, which this listing needs to let
+-- every displayed field be sortable.
 
 -- name: UpdateShortURLFields :one
 UPDATE short_urls
