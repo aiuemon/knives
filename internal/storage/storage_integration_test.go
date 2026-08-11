@@ -10,6 +10,7 @@ import (
 	"github.com/aiuemon/knives/internal/auth"
 	"github.com/aiuemon/knives/internal/permission"
 	"github.com/aiuemon/knives/internal/shorturl"
+	"github.com/aiuemon/knives/internal/stats"
 	"github.com/aiuemon/knives/internal/storage"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -17,18 +18,23 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
-// setupPostgres starts a real PostgreSQL container and applies 0001_init.up.sql,
-// so these tests catch what sqlc's static analysis cannot (enum/uuid wire
-// encoding, constraint violations, etc). It skips (not fails) when no
-// container runtime is reachable, since that's an environment limitation
-// rather than a code defect.
+// setupPostgres starts a real PostgreSQL container and applies every
+// migration in order, so these tests catch what sqlc's static analysis
+// cannot (enum/uuid wire encoding, constraint violations, etc). It skips
+// (not fails) when no container runtime is reachable, since that's an
+// environment limitation rather than a code defect.
 func setupPostgres(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	ctx := context.Background()
 
 	container, err := postgres.Run(ctx,
 		"postgres:16-alpine",
-		postgres.WithInitScripts(filepath.Join("..", "..", "db", "migrations", "0001_init.up.sql")),
+		postgres.WithInitScripts(
+			filepath.Join("..", "..", "db", "migrations", "0001_init.up.sql"),
+			filepath.Join("..", "..", "db", "migrations", "0002_local_signup_verifications.up.sql"),
+			filepath.Join("..", "..", "db", "migrations", "0003_auth_settings_reauth_confirmation.up.sql"),
+			filepath.Join("..", "..", "db", "migrations", "0004_click_events_stream_id.up.sql"),
+		),
 		postgres.WithDatabase("knives_test"),
 		postgres.WithUsername("knives"),
 		postgres.WithPassword("knives"),
@@ -346,6 +352,111 @@ func TestAuthSettingsStore_DefaultsToSecureAccountLinkMode(t *testing.T) {
 	viaProvider, err := store.RequireReauthForAccountLink(ctx)
 	if err != nil || !viaProvider {
 		t.Fatalf("RequireReauthForAccountLink: err=%v, got=%v", err, viaProvider)
+	}
+}
+
+func TestClickEventStore_InsertClickEventIsIdempotentPerStreamID(t *testing.T) {
+	pool := setupPostgres(t)
+	ctx := context.Background()
+
+	domainID := insertDefaultDomain(t, pool, "click.example.com")
+	authStore := storage.NewAuthStore(pool)
+	owner, err := authStore.CreateUser(ctx, "owner@example.com", true)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	creator := shorturl.Service{Store: storage.NewShortURLStore(pool)}
+	su, err := creator.Create(ctx, shorturl.CreateInput{DomainID: domainID, LongURL: "https://example.com", CreatedBy: owner.ID})
+	if err != nil {
+		t.Fatalf("seed short url: %v", err)
+	}
+
+	store := storage.NewClickEventStore(pool)
+	ev := stats.ClickEvent{
+		StreamID: "1-0", ShortURLID: su.ID, ClickedAt: time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
+		ReferrerHost: "example.com", UserAgentRaw: "test-agent", IPHash: "hash-1",
+	}
+
+	inserted, err := store.InsertClickEvent(ctx, ev)
+	if err != nil {
+		t.Fatalf("InsertClickEvent: %v", err)
+	}
+	if !inserted {
+		t.Fatalf("expected the first insert to succeed")
+	}
+
+	// at-least-once配送の再送(6節-5): 同じStreamIDは二度INSERTされない。
+	insertedAgain, err := store.InsertClickEvent(ctx, ev)
+	if err != nil {
+		t.Fatalf("InsertClickEvent (redelivered): %v", err)
+	}
+	if insertedAgain {
+		t.Fatalf("expected a redelivered StreamID to be a no-op")
+	}
+
+	var rowCount int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM click_events WHERE stream_id = $1", "1-0").Scan(&rowCount); err != nil {
+		t.Fatalf("count click_events: %v", err)
+	}
+	if rowCount != 1 {
+		t.Fatalf("expected exactly one click_events row for stream_id=1-0, got %d", rowCount)
+	}
+}
+
+func TestClickEventStore_UpsertDailyCountAccumulates(t *testing.T) {
+	pool := setupPostgres(t)
+	ctx := context.Background()
+
+	domainID := insertDefaultDomain(t, pool, "click2.example.com")
+	authStore := storage.NewAuthStore(pool)
+	owner, err := authStore.CreateUser(ctx, "owner2@example.com", true)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	creator := shorturl.Service{Store: storage.NewShortURLStore(pool)}
+	su, err := creator.Create(ctx, shorturl.CreateInput{DomainID: domainID, LongURL: "https://example.com", CreatedBy: owner.ID})
+	if err != nil {
+		t.Fatalf("seed short url: %v", err)
+	}
+
+	store := storage.NewClickEventStore(pool)
+	date := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
+
+	if err := store.UpsertDailyCount(ctx, su.ID, date, 3); err != nil {
+		t.Fatalf("UpsertDailyCount: %v", err)
+	}
+	if err := store.UpsertDailyCount(ctx, su.ID, date, 2); err != nil {
+		t.Fatalf("UpsertDailyCount (2nd): %v", err)
+	}
+
+	var count int64
+	if err := pool.QueryRow(ctx, "SELECT click_count FROM click_stats_daily WHERE short_url_id = $1 AND date = $2", su.ID, date).Scan(&count); err != nil {
+		t.Fatalf("query click_count: %v", err)
+	}
+	if count != 5 {
+		t.Fatalf("expected click_count=5 after two upserts (3+2), got %d", count)
+	}
+}
+
+func TestClickEventStore_EnsurePartitionIsIdempotent(t *testing.T) {
+	pool := setupPostgres(t)
+	ctx := context.Background()
+	store := storage.NewClickEventStore(pool)
+
+	month := time.Date(2027, 3, 1, 0, 0, 0, 0, time.UTC)
+	if err := store.EnsurePartition(ctx, month); err != nil {
+		t.Fatalf("EnsurePartition: %v", err)
+	}
+	if err := store.EnsurePartition(ctx, month); err != nil {
+		t.Fatalf("EnsurePartition (2nd call, must be idempotent): %v", err)
+	}
+
+	var partitionExists bool
+	if err := pool.QueryRow(ctx, "SELECT to_regclass('click_events_2027_03') IS NOT NULL").Scan(&partitionExists); err != nil {
+		t.Fatalf("check partition exists: %v", err)
+	}
+	if !partitionExists {
+		t.Fatalf("expected partition click_events_2027_03 to exist")
 	}
 }
 

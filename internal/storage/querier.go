@@ -44,6 +44,7 @@ type Querier interface {
 	FindURLPermission(ctx context.Context, arg FindURLPermissionParams) (UrlPermissionRole, error)
 	FindUserByEmail(ctx context.Context, email string) (*FindUserByEmailRow, error)
 	FindUserByID(ctx context.Context, id uuid.UUID) (*FindUserByIDRow, error)
+	InsertClickEvent(ctx context.Context, arg InsertClickEventParams) (int64, error)
 	InsertShortURL(ctx context.Context, arg InsertShortURLParams) (uuid.UUID, error)
 	InsertURLPermission(ctx context.Context, arg InsertURLPermissionParams) error
 	ListAllShortURLs(ctx context.Context, arg ListAllShortURLsParams) ([]*ShortUrl, error)
@@ -64,6 +65,7 @@ type Querier interface {
 	UpdateOIDCConfigWithSecret(ctx context.Context, arg UpdateOIDCConfigWithSecretParams) (*IdpOidcConfig, error)
 	UpdateSAMLConfig(ctx context.Context, arg UpdateSAMLConfigParams) (*IdpSamlConfig, error)
 	UpdateShortURLFields(ctx context.Context, arg UpdateShortURLFieldsParams) (*ShortUrl, error)
+	UpsertClickStatsDaily(ctx context.Context, arg UpsertClickStatsDailyParams) error
 	UpsertLocalCredentialPassword(ctx context.Context, arg UpsertLocalCredentialPasswordParams) error
 	UpsertURLPermission(ctx context.Context, arg UpsertURLPermissionParams) error
 }

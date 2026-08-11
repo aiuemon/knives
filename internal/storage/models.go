@@ -263,6 +263,7 @@ type ClickEvent struct {
 	UserAgentRaw pgtype.Text        `json:"user_agent_raw"`
 	IpHash       pgtype.Text        `json:"ip_hash"`
 	CountryCode  pgtype.Text        `json:"country_code"`
+	StreamID     string             `json:"stream_id"`
 }
 
 type ClickEventsDefault struct {

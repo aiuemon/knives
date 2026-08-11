@@ -256,7 +256,8 @@ erDiagram
 | referrer_host | text NULL | ホストのみ保持(プライバシー配慮) |
 | user_agent_raw | text | |
 | ip_hash | text | 生IPは保持しない(ソルト付きハッシュ) |
-| country_code | text NULL | 非同期GeoIP解決 |
+| country_code | text NULL | 非同期GeoIP解決(未実装。GeoIPライブラリ未選定のため現状は常にNULL) |
+| stream_id | text | Redis Streamのエントリ ID。at-least-once配送(6節-5)の冪等キー。UNIQUE(clicked_at, stream_id) |
 
 保持期間は無期限とし、削除・アーカイブ用のバッチジョブは設けない。
 
