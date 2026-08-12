@@ -5,6 +5,7 @@ import { ApiError, api } from "../api/client";
 import type { OIDCConfig } from "../api/types";
 import { Header } from "../components/Header";
 import { PencilIcon, PowerIcon, TrashIcon } from "../components/icons";
+import { ToggleIconButton } from "../components/ToggleIconButton";
 
 type OIDCConfigForm = {
 	name: string;
@@ -325,22 +326,14 @@ export function AdminOIDCConfigsPage() {
 										</p>
 									</div>
 									<div className="flex shrink-0 gap-1">
-										<button
-											type="button"
+										<ToggleIconButton
+											active={cfg.enabled}
+											color="green"
+											icon={<PowerIcon />}
 											disabled={busy}
+											ariaLabel={cfg.enabled ? "無効化" : "有効化"}
 											onClick={() => handleToggleEnabled(cfg)}
-											aria-label={cfg.enabled ? "無効化" : "有効化"}
-											title={cfg.enabled ? "無効化" : "有効化"}
-											className="rounded border border-gray-300 p-1.5 disabled:opacity-50 dark:border-gray-600"
-										>
-											<PowerIcon
-												className={
-													cfg.enabled
-														? "text-green-600 dark:text-green-400"
-														: undefined
-												}
-											/>
-										</button>
+										/>
 										<button
 											type="button"
 											disabled={busy}
