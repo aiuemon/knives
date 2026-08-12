@@ -11,6 +11,7 @@ import type {
 } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { Header } from "../components/Header";
+import { KeyIcon, PencilIcon, TrashIcon } from "../components/icons";
 
 const REDIRECT_BASE_URL =
 	import.meta.env.VITE_REDIRECT_BASE_URL ?? "http://localhost:8081";
@@ -467,23 +468,27 @@ export function DashboardPage() {
 												<td className="px-2 py-3">{su.creator_email ?? "-"}</td>
 											)}
 											<td className="px-2 py-3">
-												<div className="flex gap-2">
+												<div className="flex gap-1">
 													{su.can_edit && (
 														<button
 															type="button"
 															disabled={busy}
 															onClick={() => startEdit(su)}
-															className="rounded border border-gray-300 px-2 py-1 text-xs disabled:opacity-50 dark:border-gray-600"
+															aria-label="編集"
+															title="編集"
+															className="rounded border border-gray-300 p-1.5 disabled:opacity-50 dark:border-gray-600"
 														>
-															編集
+															<PencilIcon />
 														</button>
 													)}
 													{su.can_manage_permissions && (
 														<Link
 															to={`/short-urls/${su.id}/permissions`}
-															className="rounded border border-gray-300 px-2 py-1 text-xs dark:border-gray-600"
+															aria-label="権限管理"
+															title="権限管理"
+															className="rounded border border-gray-300 p-1.5 dark:border-gray-600"
 														>
-															権限管理
+															<KeyIcon />
 														</Link>
 													)}
 													{su.can_delete && (
@@ -491,9 +496,11 @@ export function DashboardPage() {
 															type="button"
 															disabled={busy}
 															onClick={() => handleDelete(su)}
-															className="rounded border border-gray-300 px-2 py-1 text-xs disabled:opacity-50 dark:border-gray-600"
+															aria-label="削除"
+															title="削除"
+															className="rounded border border-gray-300 p-1.5 disabled:opacity-50 dark:border-gray-600"
 														>
-															削除
+															<TrashIcon />
 														</button>
 													)}
 												</div>

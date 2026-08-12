@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { ApiError, api } from "../api/client";
 import type { SAMLConfig } from "../api/types";
 import { Header } from "../components/Header";
+import { PencilIcon, PowerIcon, TrashIcon } from "../components/icons";
 
 type SAMLConfigForm = {
 	name: string;
@@ -295,30 +296,42 @@ export function AdminSAMLConfigsPage() {
 											{cfg.trusted ? "信頼済み" : "未信頼(確認メール必須)"}
 										</p>
 									</div>
-									<div className="flex shrink-0 gap-2">
+									<div className="flex shrink-0 gap-1">
 										<button
 											type="button"
 											disabled={busy}
 											onClick={() => handleToggleEnabled(cfg)}
-											className="rounded border border-gray-300 px-2 py-1 text-xs disabled:opacity-50 dark:border-gray-600"
+											aria-label={cfg.enabled ? "無効化" : "有効化"}
+											title={cfg.enabled ? "無効化" : "有効化"}
+											className="rounded border border-gray-300 p-1.5 disabled:opacity-50 dark:border-gray-600"
 										>
-											{cfg.enabled ? "無効化" : "有効化"}
+											<PowerIcon
+												className={
+													cfg.enabled
+														? "text-green-600 dark:text-green-400"
+														: undefined
+												}
+											/>
 										</button>
 										<button
 											type="button"
 											disabled={busy}
 											onClick={() => startEdit(cfg)}
-											className="rounded border border-gray-300 px-2 py-1 text-xs disabled:opacity-50 dark:border-gray-600"
+											aria-label="編集"
+											title="編集"
+											className="rounded border border-gray-300 p-1.5 disabled:opacity-50 dark:border-gray-600"
 										>
-											編集
+											<PencilIcon />
 										</button>
 										<button
 											type="button"
 											disabled={busy}
 											onClick={() => handleDelete(cfg)}
-											className="rounded border border-gray-300 px-2 py-1 text-xs disabled:opacity-50 dark:border-gray-600"
+											aria-label="削除"
+											title="削除"
+											className="rounded border border-gray-300 p-1.5 disabled:opacity-50 dark:border-gray-600"
 										>
-											削除
+											<TrashIcon />
 										</button>
 									</div>
 								</div>
