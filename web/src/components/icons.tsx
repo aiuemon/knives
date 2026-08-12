@@ -50,28 +50,11 @@ export function KeyIcon(props: IconProps) {
 	);
 }
 
-export function ShieldIcon(props: IconProps) {
-	return (
-		<svg aria-hidden="true" {...baseProps(props)}>
-			<path d="M10 3 16 5.2V9.5C16 13 13.5 15.8 10 17 6.5 15.8 4 13 4 9.5V5.2L10 3Z" />
-		</svg>
-	);
-}
-
 export function PowerIcon(props: IconProps) {
 	return (
 		<svg aria-hidden="true" {...baseProps(props)}>
 			<path d="M10 3.5V9.5" />
 			<path d="M6 5.7A5.5 5.5 0 1 0 14 5.7" />
-		</svg>
-	);
-}
-
-export function LockIcon(props: IconProps) {
-	return (
-		<svg aria-hidden="true" {...baseProps(props)}>
-			<rect x="4.5" y="9" width="11" height="7.5" rx="1.2" />
-			<path d="M6.5 9V6.5a3.5 3.5 0 0 1 7 0V9" />
 		</svg>
 	);
 }
