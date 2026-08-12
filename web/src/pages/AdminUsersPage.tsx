@@ -5,6 +5,7 @@ import { ApiError, api } from "../api/client";
 import type { AdminUser } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { Header } from "../components/Header";
+import { LockIcon, ShieldIcon } from "../components/icons";
 
 export function AdminUsersPage() {
 	const { user: me } = useAuth();
@@ -97,33 +98,49 @@ export function AdminUsersPage() {
 												{new Date(u.created_at).toLocaleDateString()}
 											</td>
 											<td className="py-2 pr-4">
-												<div className="flex gap-2">
+												<div className="flex gap-1">
 													<button
 														type="button"
 														disabled={busy || (isSelf && u.is_system_admin)}
+														aria-label={
+															u.is_system_admin
+																? "admin権限を剥奪"
+																: "admin権限を付与"
+														}
 														title={
 															isSelf && u.is_system_admin
 																? "自分自身のsystem_admin権限は剥奪できません"
-																: undefined
+																: u.is_system_admin
+																	? "admin権限を剥奪"
+																	: "admin権限を付与"
 														}
 														onClick={() =>
 															patchUser(u.id, {
 																is_system_admin: !u.is_system_admin,
 															})
 														}
-														className="rounded border border-gray-300 px-2 py-1 text-xs disabled:opacity-50 dark:border-gray-600"
+														className="rounded border border-gray-300 p-1.5 disabled:opacity-50 dark:border-gray-600"
 													>
-														{u.is_system_admin
-															? "admin権限を剥奪"
-															: "admin権限を付与"}
+														<ShieldIcon
+															className={
+																u.is_system_admin
+																	? "text-indigo-600 dark:text-indigo-400"
+																	: undefined
+															}
+														/>
 													</button>
 													<button
 														type="button"
 														disabled={busy || (isSelf && u.status === "active")}
+														aria-label={
+															u.status === "suspended" ? "凍結解除" : "凍結"
+														}
 														title={
 															isSelf && u.status === "active"
 																? "自分自身のアカウントは凍結できません"
-																: undefined
+																: u.status === "suspended"
+																	? "凍結解除"
+																	: "凍結"
 														}
 														onClick={() =>
 															patchUser(u.id, {
@@ -133,9 +150,15 @@ export function AdminUsersPage() {
 																		: "suspended",
 															})
 														}
-														className="rounded border border-gray-300 px-2 py-1 text-xs disabled:opacity-50 dark:border-gray-600"
+														className="rounded border border-gray-300 p-1.5 disabled:opacity-50 dark:border-gray-600"
 													>
-														{u.status === "suspended" ? "凍結解除" : "凍結"}
+														<LockIcon
+															className={
+																u.status === "suspended"
+																	? "text-red-600 dark:text-red-400"
+																	: undefined
+															}
+														/>
 													</button>
 												</div>
 											</td>

@@ -4,6 +4,7 @@ import { Link, useParams } from "react-router-dom";
 import { ApiError, api } from "../api/client";
 import type { ShortURL, URLPermissionGrant } from "../api/types";
 import { Header } from "../components/Header";
+import { TrashIcon } from "../components/icons";
 
 const ROLE_LABELS: Record<string, string> = {
 	owner: "オーナー",
@@ -169,9 +170,11 @@ export function ShortURLPermissionsPage() {
 										type="button"
 										disabled={revokingUserId === grant.user_id}
 										onClick={() => handleRevoke(grant)}
-										className="rounded border border-gray-300 px-2 py-1 text-xs disabled:opacity-50 dark:border-gray-600"
+										aria-label="削除"
+										title="削除"
+										className="rounded border border-gray-300 p-1.5 disabled:opacity-50 dark:border-gray-600"
 									>
-										削除
+										<TrashIcon />
 									</button>
 								</li>
 							))}
