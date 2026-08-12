@@ -362,7 +362,9 @@ system_adminによる他者URLの閲覧は無制限に許可するが、`audit_l
 
 ### 5.1 REST/JSON
 
-管理系API(短縮URL CRUD、権限管理、統計取得、認証設定)はREST+JSONを採用。OpenAPI(`oapi-codegen`)でスキーマ駆動開発とする。GraphQLは要件に対して過剰と判断。
+管理系API(短縮URL CRUD、権限管理、統計取得、認証設定)はREST+JSONを採用。GraphQLは要件に対して過剰と判断。
+
+当初はOpenAPI(`oapi-codegen`)によるスキーマ駆動開発を想定していたが、実装段階でエンドポイント数・変更頻度に対してコード生成の導入コストが見合わないと判断し、`cmd/api` のハンドラは手書きのREST実装とした(リクエスト/レスポンス型は各ハンドラファイル内で素朴に定義)。エンドポイント数が増えてスキーマの一元管理が必要になった場合は改めて導入を検討する。
 
 ### 5.2 セッション管理: Cookie + サーバサイドセッション
 
@@ -405,25 +407,28 @@ system_adminによる他者URLの閲覧は無制限に許可するが、`audit_l
 | バリデーション | `github.com/go-playground/validator/v10` |
 | ロギング | 標準 `log/slog` |
 | メール送信 | `github.com/wneessen/go-mail` |
-| OpenAPI | `github.com/oapi-codegen/oapi-codegen` |
 | テスト | 標準 `testing` + `github.com/testcontainers/testcontainers-go` |
+
+当初は `github.com/oapi-codegen/oapi-codegen` によるOpenAPIスキーマ駆動開発を想定していたが、実装段階で見送った(5.1節)。
 
 ---
 
-## 8. 推奨フロントエンド構成
+## 8. フロントエンド構成
 
 | レイヤ | 選定 |
 |---|---|
-| フレームワーク | React 18 + TypeScript + Vite |
-| UIキット | shadcn/ui(Radix UI + Tailwind CSS) |
-| ルーティング | TanStack Router |
+| フレームワーク | React 19 + TypeScript + Vite |
+| UIキット | Tailwind CSS(独自コンポーネント。shadcn/ui等のキットは未導入) |
+| ルーティング | react-router-dom |
 | データフェッチ | TanStack Query |
-| クライアント状態 | Zustand |
-| フォーム/バリデーション | React Hook Form + Zod |
-| パスキークライアント | `@simplewebauthn/browser` |
-| グラフ/統計表示 | Recharts または Observable Plot |
+| クライアント状態 | 個別コンポーネントの `useState`(TanStack Queryのキャッシュで大半を賄えており、グローバル状態管理ライブラリを追加する必要が生じていない) |
+| フォーム/バリデーション | プレーンなcontrolled input + HTML標準バリデーション(React Hook Form/Zodは未導入) |
+| パスキークライアント | 未実装([#12](https://github.com/aiuemon/knives/issues/12)) |
+| グラフ/統計表示 | 未実装(統計閲覧機能自体が未実装、[#13](https://github.com/aiuemon/knives/issues/13)) |
 
 SSR/SEOが不要な社内管理画面のため、Next.js等のSSRフレームワークではなくVite SPA + Go APIの分離構成を選ぶ。
+
+当初はshadcn/ui・TanStack Router・Zustand・React Hook Form/Zodの採用を想定していたが、実装段階で管理画面の規模・状態の複雑さに対して導入コストが見合わないと判断し、上記の構成に落ち着いた。画面数や状態管理の複雑さが増した場合は改めて導入を検討する。
 
 ---
 
