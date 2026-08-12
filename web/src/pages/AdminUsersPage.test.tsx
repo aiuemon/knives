@@ -55,6 +55,11 @@ function renderPage() {
 	);
 }
 
+function rowFor(email: string) {
+	const rows = screen.getAllByRole("row");
+	return rows.find((r) => within(r).queryByText(email)) as HTMLElement;
+}
+
 describe("AdminUsersPage", () => {
 	beforeEach(() => {
 		vi.stubGlobal(
@@ -89,40 +94,86 @@ describe("AdminUsersPage", () => {
 		expect(screen.getByText("someone@example.com")).toBeInTheDocument();
 	});
 
+	it("shows 管理者/無効 checkboxes reflecting each user's current state", async () => {
+		renderPage();
+		await screen.findByText("admin@example.com");
+
+		const selfRow = rowFor("admin@example.com");
+		expect(
+			within(selfRow).getByRole("checkbox", { name: "管理者" }),
+		).toBeChecked();
+		expect(
+			within(selfRow).getByRole("checkbox", { name: "無効" }),
+		).not.toBeChecked();
+
+		const otherRow = rowFor("someone@example.com");
+		expect(
+			within(otherRow).getByRole("checkbox", { name: "管理者" }),
+		).not.toBeChecked();
+	});
+
 	it("disables revoking the caller's own system_admin status", async () => {
 		renderPage();
 		await screen.findByText("admin@example.com");
 
-		const rows = screen.getAllByRole("row");
-		const selfRow = rows.find((r) =>
-			within(r).queryByText("admin@example.com"),
-		);
-		expect(selfRow).toBeDefined();
-		const revokeButton = within(selfRow as HTMLElement).getByRole("button", {
-			name: "admin権限を剥奪",
+		const selfRow = rowFor("admin@example.com");
+		const adminCheckbox = within(selfRow).getByRole("checkbox", {
+			name: "管理者",
 		});
-		expect(revokeButton).toBeDisabled();
+		expect(adminCheckbox).toBeDisabled();
 	});
 
-	it("suspends another user via the PATCH endpoint", async () => {
+	it("asks for confirmation before granting admin, and cancels without change", async () => {
+		vi.spyOn(window, "confirm").mockReturnValue(false);
 		renderPage();
 		await screen.findByText("someone@example.com");
 
-		const rows = screen.getAllByRole("row");
-		const otherRow = rows.find((r) =>
-			within(r).queryByText("someone@example.com"),
-		) as HTMLElement;
-		const suspendButton = within(otherRow).getByRole("button", {
-			name: "凍結",
+		const otherRow = rowFor("someone@example.com");
+		const adminCheckbox = within(otherRow).getByRole("checkbox", {
+			name: "管理者",
 		});
 
 		const user = userEvent.setup();
-		await user.click(suspendButton);
+		await user.click(adminCheckbox);
 
-		await waitFor(() =>
-			expect(
-				within(otherRow).getByRole("button", { name: "凍結解除" }),
-			).toBeInTheDocument(),
+		expect(window.confirm).toHaveBeenCalledWith(
+			"someone@example.com に管理者権限を付与しますか?",
 		);
+		expect(adminCheckbox).not.toBeChecked();
+	});
+
+	it("grants admin after confirming", async () => {
+		vi.spyOn(window, "confirm").mockReturnValue(true);
+		renderPage();
+		await screen.findByText("someone@example.com");
+
+		const otherRow = rowFor("someone@example.com");
+		const adminCheckbox = within(otherRow).getByRole("checkbox", {
+			name: "管理者",
+		});
+
+		const user = userEvent.setup();
+		await user.click(adminCheckbox);
+
+		await waitFor(() => expect(adminCheckbox).toBeChecked());
+	});
+
+	it("disables (無効化) another user via the PATCH endpoint after confirming", async () => {
+		vi.spyOn(window, "confirm").mockReturnValue(true);
+		renderPage();
+		await screen.findByText("someone@example.com");
+
+		const otherRow = rowFor("someone@example.com");
+		const disabledCheckbox = within(otherRow).getByRole("checkbox", {
+			name: "無効",
+		});
+
+		const user = userEvent.setup();
+		await user.click(disabledCheckbox);
+
+		expect(window.confirm).toHaveBeenCalledWith(
+			"someone@example.com を無効化しますか?",
+		);
+		await waitFor(() => expect(disabledCheckbox).toBeChecked());
 	});
 });

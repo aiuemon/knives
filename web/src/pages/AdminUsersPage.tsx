@@ -5,8 +5,6 @@ import { ApiError, api } from "../api/client";
 import type { AdminUser } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { Header } from "../components/Header";
-import { LockIcon, ShieldIcon } from "../components/icons";
-import { ToggleIconButton } from "../components/ToggleIconButton";
 
 export function AdminUsersPage() {
 	const { user: me } = useAuth();
@@ -32,6 +30,33 @@ export function AdminUsersPage() {
 		} finally {
 			setPendingId(null);
 		}
+	}
+
+	// チェックボックスクリック一つで即座に権限が変わると誤操作の懸念が
+	// あるため、確認ダイアログを挟んでから実際の変更を行う。キャンセル時は
+	// 何もせず、checked は u.is_system_admin/u.status 由来のままなので
+	// 見た目も自動的に元に戻る。
+	function handleToggleAdmin(u: AdminUser) {
+		const next = !u.is_system_admin;
+		const message = next
+			? `${u.email} に管理者権限を付与しますか?`
+			: `${u.email} の管理者権限を剥奪しますか?`;
+		if (!window.confirm(message)) {
+			return;
+		}
+		patchUser(u.id, { is_system_admin: next });
+	}
+
+	function handleToggleDisabled(u: AdminUser) {
+		const next = u.status === "suspended" ? "active" : "suspended";
+		const message =
+			next === "suspended"
+				? `${u.email} を無効化しますか?`
+				: `${u.email} を有効化しますか?`;
+		if (!window.confirm(message)) {
+			return;
+		}
+		patchUser(u.id, { status: next });
 	}
 
 	return (
@@ -73,10 +98,9 @@ export function AdminUsersPage() {
 							<thead>
 								<tr className="border-b border-gray-200 text-gray-500 dark:border-gray-700 dark:text-gray-400">
 									<th className="py-2 pr-4 font-medium">メールアドレス</th>
-									<th className="py-2 pr-4 font-medium">system_admin</th>
-									<th className="py-2 pr-4 font-medium">状態</th>
+									<th className="py-2 pr-4 font-medium">管理者</th>
+									<th className="py-2 pr-4 font-medium">無効</th>
 									<th className="py-2 pr-4 font-medium">登録日</th>
-									<th className="py-2 pr-4 font-medium" />
 								</tr>
 							</thead>
 							<tbody>
@@ -90,60 +114,37 @@ export function AdminUsersPage() {
 										>
 											<td className="py-2 pr-4">{u.email}</td>
 											<td className="py-2 pr-4">
-												{u.is_system_admin ? "はい" : "いいえ"}
+												<input
+													type="checkbox"
+													checked={u.is_system_admin}
+													disabled={busy || (isSelf && u.is_system_admin)}
+													onChange={() => handleToggleAdmin(u)}
+													aria-label="管理者"
+													title={
+														isSelf && u.is_system_admin
+															? "自分自身のsystem_admin権限は剥奪できません"
+															: undefined
+													}
+													className="h-4 w-4 disabled:opacity-50"
+												/>
 											</td>
 											<td className="py-2 pr-4">
-												{u.status === "suspended" ? "凍結中" : "有効"}
+												<input
+													type="checkbox"
+													checked={u.status === "suspended"}
+													disabled={busy || (isSelf && u.status === "active")}
+													onChange={() => handleToggleDisabled(u)}
+													aria-label="無効"
+													title={
+														isSelf && u.status === "active"
+															? "自分自身のアカウントは無効化できません"
+															: undefined
+													}
+													className="h-4 w-4 disabled:opacity-50"
+												/>
 											</td>
 											<td className="py-2 pr-4 text-gray-500">
 												{new Date(u.created_at).toLocaleDateString()}
-											</td>
-											<td className="py-2 pr-4">
-												<div className="flex gap-1">
-													<ToggleIconButton
-														active={u.is_system_admin}
-														color="indigo"
-														icon={<ShieldIcon />}
-														disabled={busy || (isSelf && u.is_system_admin)}
-														ariaLabel={
-															u.is_system_admin
-																? "admin権限を剥奪"
-																: "admin権限を付与"
-														}
-														title={
-															isSelf && u.is_system_admin
-																? "自分自身のsystem_admin権限は剥奪できません"
-																: undefined
-														}
-														onClick={() =>
-															patchUser(u.id, {
-																is_system_admin: !u.is_system_admin,
-															})
-														}
-													/>
-													<ToggleIconButton
-														active={u.status === "suspended"}
-														color="red"
-														icon={<LockIcon />}
-														disabled={busy || (isSelf && u.status === "active")}
-														ariaLabel={
-															u.status === "suspended" ? "凍結解除" : "凍結"
-														}
-														title={
-															isSelf && u.status === "active"
-																? "自分自身のアカウントは凍結できません"
-																: undefined
-														}
-														onClick={() =>
-															patchUser(u.id, {
-																status:
-																	u.status === "suspended"
-																		? "active"
-																		: "suspended",
-															})
-														}
-													/>
-												</div>
 											</td>
 										</tr>
 									);
