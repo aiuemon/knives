@@ -16,7 +16,7 @@
 ## 言語・ツール
 
 - 言語: Go 1.22+ / TypeScript
-- フレームワーク: chi(HTTP) / React 18 + Vite(フロントエンド、`web/`)
+- フレームワーク: chi(HTTP) / React 19 + Vite(フロントエンド、`web/`)
 - DB: PostgreSQL(pgx + sqlc) / Redis(キャッシュ・セッション・Streams)
 - ビルド: `go build ./...`
 - テスト: `go test ./...`
