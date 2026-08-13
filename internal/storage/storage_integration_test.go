@@ -460,6 +460,67 @@ func TestClickEventStore_EnsurePartitionIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestStatsStore_DailyAndReferrerCounts(t *testing.T) {
+	pool := setupPostgres(t)
+	ctx := context.Background()
+
+	domainID := insertDefaultDomain(t, pool, "stats.example.com")
+	authStore := storage.NewAuthStore(pool)
+	owner, err := authStore.CreateUser(ctx, "stats-owner@example.com", true)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	creator := shorturl.Service{Store: storage.NewShortURLStore(pool)}
+	su, err := creator.Create(ctx, shorturl.CreateInput{DomainID: domainID, LongURL: "https://example.com/stats-target", CreatedBy: owner.ID})
+	if err != nil {
+		t.Fatalf("seed short url: %v", err)
+	}
+
+	clickStore := storage.NewClickEventStore(pool)
+	day1 := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
+	day2 := time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC)
+	if err := clickStore.UpsertDailyCount(ctx, su.ID, day1, 3); err != nil {
+		t.Fatalf("UpsertDailyCount day1: %v", err)
+	}
+	if err := clickStore.UpsertDailyCount(ctx, su.ID, day2, 5); err != nil {
+		t.Fatalf("UpsertDailyCount day2: %v", err)
+	}
+
+	events := []stats.ClickEvent{
+		{StreamID: "s1-0", ShortURLID: su.ID, ClickedAt: day1.Add(1 * time.Hour), ReferrerHost: "google.com", IPHash: "h1"},
+		{StreamID: "s1-1", ShortURLID: su.ID, ClickedAt: day1.Add(2 * time.Hour), ReferrerHost: "google.com", IPHash: "h2"},
+		{StreamID: "s1-2", ShortURLID: su.ID, ClickedAt: day2.Add(1 * time.Hour), ReferrerHost: "", IPHash: "h3"},
+	}
+	for _, ev := range events {
+		if _, err := clickStore.InsertClickEvent(ctx, ev); err != nil {
+			t.Fatalf("InsertClickEvent %s: %v", ev.StreamID, err)
+		}
+	}
+
+	statsStore := storage.NewStatsStore(pool)
+	from := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
+
+	daily, err := statsStore.DailyCounts(ctx, su.ID, from, to)
+	if err != nil {
+		t.Fatalf("DailyCounts: %v", err)
+	}
+	if len(daily) != 2 || daily[0].ClickCount != 3 || daily[1].ClickCount != 5 {
+		t.Fatalf("expected [3,5] ordered by date, got %+v", daily)
+	}
+
+	referrers, err := statsStore.ReferrerCounts(ctx, su.ID, from, to.Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("ReferrerCounts: %v", err)
+	}
+	if len(referrers) != 2 {
+		t.Fatalf("expected 2 referrer groups (google.com + direct), got %+v", referrers)
+	}
+	if referrers[0].ReferrerHost != "google.com" || referrers[0].ClickCount != 2 {
+		t.Fatalf("expected google.com with count 2 to sort first (DESC by count), got %+v", referrers[0])
+	}
+}
+
 func insertDefaultDomain(t *testing.T, pool *pgxpool.Pool, hostname string) uuid.UUID {
 	t.Helper()
 	var domainID uuid.UUID

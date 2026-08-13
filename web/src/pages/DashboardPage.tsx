@@ -11,7 +11,7 @@ import type {
 } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { Header } from "../components/Header";
-import { KeyIcon, PencilIcon, TrashIcon } from "../components/icons";
+import { ChartIcon, KeyIcon, PencilIcon, TrashIcon } from "../components/icons";
 
 const REDIRECT_BASE_URL =
 	import.meta.env.VITE_REDIRECT_BASE_URL ?? "http://localhost:8081";
@@ -469,6 +469,14 @@ export function DashboardPage() {
 											)}
 											<td className="px-2 py-3">
 												<div className="flex gap-1">
+													<Link
+														to={`/short-urls/${su.id}/stats`}
+														aria-label="統計"
+														title="統計"
+														className="rounded border border-gray-300 p-1.5 dark:border-gray-600"
+													>
+														<ChartIcon />
+													</Link>
 													{su.can_edit && (
 														<button
 															type="button"

@@ -46,6 +46,25 @@ export interface ShortURLListResponse {
 	total: number;
 }
 
+export interface ShortURLDailyStat {
+	date: string;
+	click_count: number;
+}
+
+export interface ShortURLReferrerStat {
+	referrer_host: string;
+	click_count: number;
+}
+
+// ShortURLStats is GET /short-urls/{id}/stats (4節)。from/toはリクエストで
+// 指定した(または既定の)日付範囲そのまま(YYYY-MM-DD)。
+export interface ShortURLStats {
+	from: string;
+	to: string;
+	daily: ShortURLDailyStat[];
+	by_referrer: ShortURLReferrerStat[];
+}
+
 export interface URLPermissionGrant {
 	user_id: string;
 	email: string;

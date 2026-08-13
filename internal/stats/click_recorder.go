@@ -1,10 +1,10 @@
-// Package stats implements click-event ingestion and daily rollup
-// aggregation (docs/architecture.md 6節-4,5): cmd/worker reads raw click
-// events off the Redis Stream cmd/redirect pushes to, and this package
-// turns them into durable click_events rows plus an incremental
-// click_stats_daily count — the write side of statistics. Permission-gated
-// reading of those tables for the admin UI is a separate, not-yet-built
-// concern (4節).
+// Package stats implements click-event ingestion/aggregation (write side,
+// docs/architecture.md 6節-4,5: cmd/worker reads the Redis Stream
+// cmd/redirect pushes to and turns it into durable click_events rows plus
+// an incremental click_stats_daily count) and querying that data back out
+// (read side, Reader/Service in reader.go) for the stats-viewing feature
+// (4節). Permission-gating which callers may query which short URL's stats
+// is cmd/api's responsibility (resolveAccess), not this package's.
 package stats
 
 import (

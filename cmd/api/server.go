@@ -12,6 +12,7 @@ import (
 	"github.com/aiuemon/knives/internal/auth"
 	"github.com/aiuemon/knives/internal/permission"
 	"github.com/aiuemon/knives/internal/shorturl"
+	"github.com/aiuemon/knives/internal/stats"
 	"github.com/aiuemon/knives/internal/storage"
 )
 
@@ -68,6 +69,7 @@ type server struct {
 	permissions  permissionChecker
 	shortURLs    *shorturl.Service
 	shortURLGet  shorturl.Store
+	stats        *stats.Service
 	cache        shortURLCacheInvalidator
 	samlConfigs  *auth.SAMLConfigService
 	samlLogin    samlLoginService
@@ -127,6 +129,8 @@ func (s *server) routes() http.Handler {
 			r.Get("/short-urls/{id}/permissions", s.handleListURLPermissions)
 			r.Post("/short-urls/{id}/permissions", s.handleGrantURLPermission)
 			r.Delete("/short-urls/{id}/permissions/{userId}", s.handleRevokeURLPermission)
+
+			r.Get("/short-urls/{id}/stats", s.handleGetShortURLStats)
 
 			r.Route("/admin", func(r chi.Router) {
 				r.Use(s.requireSystemAdmin)

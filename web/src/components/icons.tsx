@@ -58,3 +58,14 @@ export function PowerIcon(props: IconProps) {
 		</svg>
 	);
 }
+
+export function ChartIcon(props: IconProps) {
+	return (
+		<svg aria-hidden="true" {...baseProps(props)}>
+			<path d="M4 16.5h12" />
+			<path d="M6.5 16.5V11" />
+			<path d="M10 16.5V6.5" />
+			<path d="M13.5 16.5V9" />
+		</svg>
+	);
+}
