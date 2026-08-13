@@ -8,12 +8,14 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
 	"syscall"
 	"time"
 
+	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
@@ -94,6 +96,7 @@ func main() {
 	signupVerificationStore := storage.NewLocalSignupVerificationStore(pool)
 	samlConfigStore := storage.NewSAMLConfigStore(pool)
 	oidcConfigStore := storage.NewOIDCConfigStore(pool, credentialCipher)
+	webauthnCredentialStore := storage.NewWebAuthnCredentialStore(pool)
 
 	domainStore := storage.NewRedirectStore(pool) // FindDefaultDomain is shared with cmd/redirect
 	domainID, err := domainStore.FindDefaultDomain(ctx)
@@ -130,6 +133,30 @@ func main() {
 		PublicBaseURL: apiPublicBaseURL,
 	}
 
+	// WebAuthnのceremonyはSPA(web/)のオリジンでnavigator.credentialsが
+	// 呼ばれるため、RPOriginsはAPIではなくweb側のオリジンを指す(3.1節)。
+	// RPIDはスキーム・ポートを含まないホスト名のみ。
+	webauthnRPID, err := hostnameOf(webPublicBaseURL)
+	if err != nil {
+		slog.Error("invalid WEB_PUBLIC_BASE_URL for webauthn RPID", "error", err)
+		os.Exit(1)
+	}
+	webauthnInstance, err := webauthn.New(&webauthn.Config{
+		RPID:          webauthnRPID,
+		RPDisplayName: "knives",
+		RPOrigins:     []string{webPublicBaseURL},
+	})
+	if err != nil {
+		slog.Error("webauthn config init failed", "error", err)
+		os.Exit(1)
+	}
+	webauthnService := &auth.WebAuthnService{
+		WebAuthn:    webauthnInstance,
+		Users:       authStore,
+		Credentials: webauthnCredentialStore,
+		Sessions:    auth.NewRedisWebAuthnSessionStore(redisClient),
+	}
+
 	srv := &server{
 		sessions:  auth.NewRedisSessionStore(redisClient),
 		authStore: authStore,
@@ -142,16 +169,18 @@ func main() {
 			Credentials:   credentialStore,
 			VerifyBaseURL: webPublicBaseURL + "/auth/local/verify-email",
 		},
-		authSettings: authSettingsStore,
-		permissions:  permissionStore,
-		shortURLs:    &shorturl.Service{Store: shortURLStore},
-		shortURLGet:  shortURLStore,
-		stats:        &stats.Service{Reader: statsStore},
-		cache:        shortURLCache,
-		samlConfigs:  &auth.SAMLConfigService{Store: samlConfigStore},
-		samlLogin:    samlLogin,
-		oidcConfigs:  &auth.OIDCConfigService{Store: oidcConfigStore},
-		oidcLogin:    oidcLogin,
+		authSettings:        authSettingsStore,
+		permissions:         permissionStore,
+		shortURLs:           &shorturl.Service{Store: shortURLStore},
+		shortURLGet:         shortURLStore,
+		stats:               &stats.Service{Reader: statsStore},
+		cache:               shortURLCache,
+		samlConfigs:         &auth.SAMLConfigService{Store: samlConfigStore},
+		samlLogin:           samlLogin,
+		oidcConfigs:         &auth.OIDCConfigService{Store: oidcConfigStore},
+		oidcLogin:           oidcLogin,
+		webauthn:            webauthnService,
+		webauthnCredentials: webauthnCredentialStore,
 
 		domainID: domainID,
 
@@ -239,4 +268,18 @@ func getenv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// hostnameOf extracts just the host (no scheme, no port) from rawURL, for
+// webauthn.Config.RPID — which per the library's own docs "should generally
+// be the origin without a scheme and port".
+func hostnameOf(rawURL string) (string, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", err
+	}
+	if u.Hostname() == "" {
+		return "", errors.New("no hostname in URL: " + rawURL)
+	}
+	return u.Hostname(), nil
 }

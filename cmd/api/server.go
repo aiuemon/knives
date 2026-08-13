@@ -60,21 +60,23 @@ type shortURLCacheInvalidator interface {
 }
 
 type server struct {
-	sessions     auth.SessionStore
-	authStore    auth.Store // also used for audit_log writes (stats.admin_view, 4.1節)
-	localAuth    *auth.LocalAuthenticator
-	resolver     *auth.Resolver // account-link confirmation (3.4節), used directly by handleConfirmLink
-	localSignup  *auth.LocalSignup
-	authSettings authSettingsChecker
-	permissions  permissionChecker
-	shortURLs    *shorturl.Service
-	shortURLGet  shorturl.Store
-	stats        *stats.Service
-	cache        shortURLCacheInvalidator
-	samlConfigs  *auth.SAMLConfigService
-	samlLogin    samlLoginService
-	oidcConfigs  *auth.OIDCConfigService
-	oidcLogin    oidcLoginService
+	sessions            auth.SessionStore
+	authStore           auth.Store // also used for audit_log writes (stats.admin_view, 4.1節)
+	localAuth           *auth.LocalAuthenticator
+	resolver            *auth.Resolver // account-link confirmation (3.4節), used directly by handleConfirmLink
+	localSignup         *auth.LocalSignup
+	authSettings        authSettingsChecker
+	permissions         permissionChecker
+	shortURLs           *shorturl.Service
+	shortURLGet         shorturl.Store
+	stats               *stats.Service
+	cache               shortURLCacheInvalidator
+	samlConfigs         *auth.SAMLConfigService
+	samlLogin           samlLoginService
+	oidcConfigs         *auth.OIDCConfigService
+	oidcLogin           oidcLoginService
+	webauthn            *auth.WebAuthnService
+	webauthnCredentials auth.WebAuthnCredentialStore
 
 	domainID uuid.UUID
 
@@ -113,12 +115,24 @@ func (s *server) routes() http.Handler {
 		r.Get("/auth/oidc/{id}/login", s.handleOIDCLoginRedirect)
 		r.Get("/auth/oidc/{id}/callback", s.handleOIDCCallback)
 
+		// パスキーログインはメールアドレス不要(discoverable credential)の
+		// ため未認証で開始する(3.1節)。
+		r.Post("/auth/webauthn/login/begin", s.handleWebAuthnLoginBegin)
+		r.Post("/auth/webauthn/login/finish", s.handleWebAuthnLoginFinish)
+
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireAuth)
 			r.Get("/auth/me", s.handleMe)
 			r.Post("/auth/local/password", s.handleSetPassword)
 			r.Get("/auth/pending-links", s.handleListPendingLinks)
 			r.Post("/auth/pending-links/{id}/approve", s.handleApprovePendingLink)
+
+			// パスキーの登録はログイン済みユーザが追加登録するモデル(3.1節)
+			// のため認証必須。
+			r.Post("/auth/webauthn/register/begin", s.handleWebAuthnRegisterBegin)
+			r.Post("/auth/webauthn/register/finish", s.handleWebAuthnRegisterFinish)
+			r.Get("/auth/webauthn/credentials", s.handleListWebAuthnCredentials)
+			r.Delete("/auth/webauthn/credentials/{id}", s.handleDeleteWebAuthnCredential)
 
 			r.Get("/short-urls", s.handleListShortURLs)
 			r.Post("/short-urls", s.handleCreateShortURL)
@@ -152,6 +166,5 @@ func (s *server) routes() http.Handler {
 		})
 	})
 
-	// TODO: WebAuthn、統計API。
 	return r
 }

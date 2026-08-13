@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/google/uuid"
 
 	"github.com/aiuemon/knives/internal/auth"
@@ -469,6 +470,60 @@ func (r *fakeStatsReader) ReferrerCounts(_ context.Context, shortURLID uuid.UUID
 	return r.referrers[shortURLID], nil
 }
 
+type fakeWebAuthnCredentialStore struct {
+	byUser map[uuid.UUID][]auth.WebAuthnCredential
+}
+
+func newFakeWebAuthnCredentialStore() *fakeWebAuthnCredentialStore {
+	return &fakeWebAuthnCredentialStore{byUser: map[uuid.UUID][]auth.WebAuthnCredential{}}
+}
+
+func (s *fakeWebAuthnCredentialStore) FindWebAuthnCredentialsByUserID(_ context.Context, userID uuid.UUID) ([]auth.WebAuthnCredential, error) {
+	return s.byUser[userID], nil
+}
+
+func (s *fakeWebAuthnCredentialStore) CreateWebAuthnCredential(_ context.Context, cred auth.WebAuthnCredential) error {
+	s.byUser[cred.UserID] = append(s.byUser[cred.UserID], cred)
+	return nil
+}
+
+func (s *fakeWebAuthnCredentialStore) UpdateWebAuthnCredentialSignCount(_ context.Context, _ []byte, _ uint32) error {
+	return nil
+}
+
+func (s *fakeWebAuthnCredentialStore) DeleteWebAuthnCredential(_ context.Context, id, userID uuid.UUID) error {
+	creds := s.byUser[userID]
+	for i, c := range creds {
+		if c.ID == id {
+			s.byUser[userID] = append(creds[:i], creds[i+1:]...)
+			return nil
+		}
+	}
+	return auth.ErrNotFound
+}
+
+type fakeWebAuthnSessionStore struct {
+	data map[string][]byte
+}
+
+func newFakeWebAuthnSessionStore() *fakeWebAuthnSessionStore {
+	return &fakeWebAuthnSessionStore{data: map[string][]byte{}}
+}
+
+func (s *fakeWebAuthnSessionStore) Create(_ context.Context, ceremonyID string, data []byte, _ time.Duration) error {
+	s.data[ceremonyID] = data
+	return nil
+}
+
+func (s *fakeWebAuthnSessionStore) Consume(_ context.Context, ceremonyID string) ([]byte, bool, error) {
+	data, ok := s.data[ceremonyID]
+	if !ok {
+		return nil, false, nil
+	}
+	delete(s.data, ceremonyID)
+	return data, true, nil
+}
+
 type fakePermissions struct {
 	grants map[string]*permission.Grant
 	admins map[uuid.UUID]bool
@@ -788,33 +843,37 @@ func (f *fakeOIDCLoginService) HandleCallback(ctx context.Context, configID uuid
 }
 
 type testDeps struct {
-	server       *server
-	authStore    *fakeAuthStore
-	credentials  *fakeCredentials
-	sessions     *fakeSessions
-	shortURLs    *fakeShortURLStore
-	statsReader  *fakeStatsReader
-	permissions  *fakePermissions
-	cache        *fakeCacheInvalidator
-	mailer       *fakeMailer
-	authSettings *fakeAuthSettings
-	signupStore  *fakeSignupStore
-	samlConfigs  *fakeSAMLConfigStore
-	samlLogin    *fakeSAMLLoginService
-	oidcConfigs  *fakeOIDCConfigStore
-	oidcLogin    *fakeOIDCLoginService
+	server              *server
+	authStore           *fakeAuthStore
+	credentials         *fakeCredentials
+	sessions            *fakeSessions
+	shortURLs           *fakeShortURLStore
+	statsReader         *fakeStatsReader
+	webauthnCredentials *fakeWebAuthnCredentialStore
+	webauthnSessions    *fakeWebAuthnSessionStore
+	permissions         *fakePermissions
+	cache               *fakeCacheInvalidator
+	mailer              *fakeMailer
+	authSettings        *fakeAuthSettings
+	signupStore         *fakeSignupStore
+	samlConfigs         *fakeSAMLConfigStore
+	samlLogin           *fakeSAMLLoginService
+	oidcConfigs         *fakeOIDCConfigStore
+	oidcLogin           *fakeOIDCLoginService
 }
 
 func newTestServer() *testDeps {
 	d := &testDeps{
-		authStore:   newFakeAuthStore(),
-		credentials: newFakeCredentials(),
-		sessions:    newFakeSessions(),
-		shortURLs:   newFakeShortURLStore(),
-		statsReader: newFakeStatsReader(),
-		permissions: newFakePermissions(),
-		cache:       &fakeCacheInvalidator{},
-		mailer:      &fakeMailer{},
+		authStore:           newFakeAuthStore(),
+		credentials:         newFakeCredentials(),
+		sessions:            newFakeSessions(),
+		shortURLs:           newFakeShortURLStore(),
+		statsReader:         newFakeStatsReader(),
+		webauthnCredentials: newFakeWebAuthnCredentialStore(),
+		webauthnSessions:    newFakeWebAuthnSessionStore(),
+		permissions:         newFakePermissions(),
+		cache:               &fakeCacheInvalidator{},
+		mailer:              &fakeMailer{},
 		authSettings: &fakeAuthSettings{
 			localAuthEnabled:    true,
 			selfSignupEnabled:   true,
@@ -847,6 +906,14 @@ func newTestServer() *testDeps {
 		ConfirmBaseURL:  "http://localhost:8080/api/auth/confirm-link",
 		PendingLinksURL: "http://localhost:8080/auth/pending-links",
 	}
+	testWebAuthn, err := webauthn.New(&webauthn.Config{
+		RPID:          "localhost",
+		RPDisplayName: "knives-test",
+		RPOrigins:     []string{"http://localhost:5173"},
+	})
+	if err != nil {
+		panic(err)
+	}
 	d.server = &server{
 		sessions:  d.sessions,
 		authStore: d.authStore,
@@ -859,21 +926,28 @@ func newTestServer() *testDeps {
 			Credentials:   d.credentials,
 			VerifyBaseURL: "http://localhost:8080/api/auth/local/verify-email",
 		},
-		authSettings:      d.authSettings,
-		permissions:       d.permissions,
-		shortURLs:         &shorturl.Service{Store: d.shortURLs},
-		shortURLGet:       d.shortURLs,
-		stats:             &stats.Service{Reader: d.statsReader},
-		cache:             d.cache,
-		samlConfigs:       &auth.SAMLConfigService{Store: d.samlConfigs},
-		samlLogin:         d.samlLogin,
-		oidcConfigs:       &auth.OIDCConfigService{Store: d.oidcConfigs},
-		oidcLogin:         d.oidcLogin,
-		domainID:          uuid.New(),
-		sessionCookieName: "knives_session",
-		sessionTTL:        time.Hour,
-		secureCookies:     false,
-		webPublicBaseURL:  "http://localhost:5173",
+		authSettings: d.authSettings,
+		permissions:  d.permissions,
+		shortURLs:    &shorturl.Service{Store: d.shortURLs},
+		shortURLGet:  d.shortURLs,
+		stats:        &stats.Service{Reader: d.statsReader},
+		cache:        d.cache,
+		samlConfigs:  &auth.SAMLConfigService{Store: d.samlConfigs},
+		samlLogin:    d.samlLogin,
+		oidcConfigs:  &auth.OIDCConfigService{Store: d.oidcConfigs},
+		oidcLogin:    d.oidcLogin,
+		webauthn: &auth.WebAuthnService{
+			WebAuthn:    testWebAuthn,
+			Users:       d.authStore,
+			Credentials: d.webauthnCredentials,
+			Sessions:    d.webauthnSessions,
+		},
+		webauthnCredentials: d.webauthnCredentials,
+		domainID:            uuid.New(),
+		sessionCookieName:   "knives_session",
+		sessionTTL:          time.Hour,
+		secureCookies:       false,
+		webPublicBaseURL:    "http://localhost:5173",
 	}
 	return d
 }
@@ -924,6 +998,195 @@ func TestHandleLocalLogin_InvalidCredentials(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+}
+
+func TestHandleWebAuthnRegisterBegin_RequiresAuth(t *testing.T) {
+	d := newTestServer()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/webauthn/register/begin", nil)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+}
+
+func TestHandleWebAuthnRegisterBegin_ReturnsCeremonyScopedToTheCaller(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	user, _ := d.authStore.CreateUser(ctx, "user@example.com", true)
+	token, _ := d.sessions.Create(ctx, user.ID, time.Hour)
+
+	req := withSessionCookie(httptest.NewRequest(http.MethodPost, "/api/auth/webauthn/register/begin", nil), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp webauthnCeremonyResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.CeremonyID == "" {
+		t.Fatalf("expected a non-empty ceremony_id")
+	}
+	if len(d.webauthnSessions.data) != 1 {
+		t.Fatalf("expected exactly one stored ceremony, got %d", len(d.webauthnSessions.data))
+	}
+}
+
+func TestHandleWebAuthnRegisterFinish_MissingCeremonyIDReturns400(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	user, _ := d.authStore.CreateUser(ctx, "user@example.com", true)
+	token, _ := d.sessions.Create(ctx, user.ID, time.Hour)
+
+	req := withSessionCookie(httptest.NewRequest(http.MethodPost, "/api/auth/webauthn/register/finish", nil), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for a missing ceremony_id, got %d", rec.Code)
+	}
+}
+
+func TestHandleWebAuthnRegisterFinish_UnknownCeremonyReturns400(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	user, _ := d.authStore.CreateUser(ctx, "user@example.com", true)
+	token, _ := d.sessions.Create(ctx, user.ID, time.Hour)
+
+	req := withSessionCookie(httptest.NewRequest(http.MethodPost, "/api/auth/webauthn/register/finish?ceremony_id=never-issued", nil), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for an unknown/expired ceremony, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleWebAuthnLoginBegin_IsPublic(t *testing.T) {
+	d := newTestServer()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/webauthn/login/begin", nil)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 (login/begin must not require auth — usernameless login), got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp webauthnCeremonyResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.CeremonyID == "" {
+		t.Fatalf("expected a non-empty ceremony_id")
+	}
+}
+
+func TestHandleWebAuthnLoginFinish_MissingCeremonyIDReturns400(t *testing.T) {
+	d := newTestServer()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/webauthn/login/finish", nil)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for a missing ceremony_id, got %d", rec.Code)
+	}
+}
+
+func TestHandleWebAuthnLoginFinish_UnknownCeremonyReturns400(t *testing.T) {
+	d := newTestServer()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/webauthn/login/finish?ceremony_id=never-issued", nil)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for an unknown/expired ceremony, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleListWebAuthnCredentials_RequiresAuthAndScopesToTheCaller(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	user, _ := d.authStore.CreateUser(ctx, "user@example.com", true)
+	other, _ := d.authStore.CreateUser(ctx, "other@example.com", true)
+	token, _ := d.sessions.Create(ctx, user.ID, time.Hour)
+
+	d.webauthnCredentials.byUser[user.ID] = []auth.WebAuthnCredential{
+		{ID: uuid.New(), UserID: user.ID, Transports: []string{"internal"}},
+	}
+	d.webauthnCredentials.byUser[other.ID] = []auth.WebAuthnCredential{
+		{ID: uuid.New(), UserID: other.ID, Transports: []string{"usb"}},
+	}
+
+	req := withSessionCookie(httptest.NewRequest(http.MethodGet, "/api/auth/webauthn/credentials", nil), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp []webauthnCredentialResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp) != 1 || resp[0].Transports[0] != "internal" {
+		t.Fatalf("expected exactly the caller's own credential, got %+v", resp)
+	}
+}
+
+func TestHandleDeleteWebAuthnCredential_CannotDeleteAnotherUsersCredential(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	owner, _ := d.authStore.CreateUser(ctx, "owner@example.com", true)
+	attacker, _ := d.authStore.CreateUser(ctx, "attacker@example.com", true)
+	token, _ := d.sessions.Create(ctx, attacker.ID, time.Hour)
+
+	credID := uuid.New()
+	d.webauthnCredentials.byUser[owner.ID] = []auth.WebAuthnCredential{{ID: credID, UserID: owner.ID}}
+
+	req := withSessionCookie(httptest.NewRequest(http.MethodDelete, "/api/auth/webauthn/credentials/"+credID.String(), nil), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 when deleting another user's credential, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(d.webauthnCredentials.byUser[owner.ID]) != 1 {
+		t.Fatalf("expected the owner's credential to remain untouched")
+	}
+}
+
+func TestHandleDeleteWebAuthnCredential_OwnerCanDeleteTheirOwn(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	user, _ := d.authStore.CreateUser(ctx, "user@example.com", true)
+	token, _ := d.sessions.Create(ctx, user.ID, time.Hour)
+
+	credID := uuid.New()
+	d.webauthnCredentials.byUser[user.ID] = []auth.WebAuthnCredential{{ID: credID, UserID: user.ID}}
+
+	req := withSessionCookie(httptest.NewRequest(http.MethodDelete, "/api/auth/webauthn/credentials/"+credID.String(), nil), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(d.webauthnCredentials.byUser[user.ID]) != 0 {
+		t.Fatalf("expected the credential to be removed")
 	}
 }
 
