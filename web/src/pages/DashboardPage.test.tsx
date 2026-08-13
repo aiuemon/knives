@@ -122,6 +122,15 @@ describe("DashboardPage", () => {
 		expect(screen.getByText("https://example.com/owned")).toBeInTheDocument();
 	});
 
+	it("always shows a stats link, regardless of edit/delete permissions", async () => {
+		renderPage(regularUser, [viewOnlyURL]);
+		await screen.findByText(/def456/);
+		expect(screen.getByRole("link", { name: "統計" })).toHaveAttribute(
+			"href",
+			`/short-urls/${viewOnlyURL.id}/stats`,
+		);
+	});
+
 	it("only shows edit/delete/permissions actions the user is allowed to take", async () => {
 		renderPage(regularUser, [viewOnlyURL]);
 		await screen.findByText(/def456/);

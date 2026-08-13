@@ -10,6 +10,7 @@ import { DashboardPage } from "./pages/DashboardPage";
 import { LoginPage } from "./pages/LoginPage";
 import { PendingLinksPage } from "./pages/PendingLinksPage";
 import { ShortURLPermissionsPage } from "./pages/ShortURLPermissionsPage";
+import { ShortURLStatsPage } from "./pages/ShortURLStatsPage";
 import { SignupPage } from "./pages/SignupPage";
 import { VerifyEmailPage } from "./pages/VerifyEmailPage";
 
@@ -41,6 +42,14 @@ function App() {
 				element={
 					<ProtectedRoute>
 						<ShortURLPermissionsPage />
+					</ProtectedRoute>
+				}
+			/>
+			<Route
+				path="/short-urls/:id/stats"
+				element={
+					<ProtectedRoute>
+						<ShortURLStatsPage />
 					</ProtectedRoute>
 				}
 			/>

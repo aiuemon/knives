@@ -20,6 +20,7 @@ import (
 	"github.com/aiuemon/knives/internal/auth"
 	"github.com/aiuemon/knives/internal/cache"
 	"github.com/aiuemon/knives/internal/shorturl"
+	"github.com/aiuemon/knives/internal/stats"
 	"github.com/aiuemon/knives/internal/storage"
 )
 
@@ -88,6 +89,7 @@ func main() {
 	credentialStore := storage.NewLocalCredentialStore(pool)
 	permissionStore := storage.NewPermissionStore(pool)
 	shortURLStore := storage.NewShortURLStore(pool)
+	statsStore := storage.NewStatsStore(pool)
 	authSettingsStore := storage.NewAuthSettingsStore(pool)
 	signupVerificationStore := storage.NewLocalSignupVerificationStore(pool)
 	samlConfigStore := storage.NewSAMLConfigStore(pool)
@@ -144,6 +146,7 @@ func main() {
 		permissions:  permissionStore,
 		shortURLs:    &shorturl.Service{Store: shortURLStore},
 		shortURLGet:  shortURLStore,
+		stats:        &stats.Service{Reader: statsStore},
 		cache:        shortURLCache,
 		samlConfigs:  &auth.SAMLConfigService{Store: samlConfigStore},
 		samlLogin:    samlLogin,

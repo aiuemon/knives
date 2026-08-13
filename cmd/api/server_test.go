@@ -21,6 +21,7 @@ import (
 	"github.com/aiuemon/knives/internal/auth"
 	"github.com/aiuemon/knives/internal/permission"
 	"github.com/aiuemon/knives/internal/shorturl"
+	"github.com/aiuemon/knives/internal/stats"
 	"github.com/aiuemon/knives/internal/storage"
 )
 
@@ -441,6 +442,33 @@ func (s *fakeShortURLStore) SetStatus(_ context.Context, id uuid.UUID, status sh
 	return nil
 }
 
+type fakeStatsReader struct {
+	daily      map[uuid.UUID][]stats.DailyCount
+	referrers  map[uuid.UUID][]stats.ReferrerCount
+	calledWith struct {
+		shortURLID uuid.UUID
+		from, to   time.Time
+	}
+}
+
+func newFakeStatsReader() *fakeStatsReader {
+	return &fakeStatsReader{
+		daily:     map[uuid.UUID][]stats.DailyCount{},
+		referrers: map[uuid.UUID][]stats.ReferrerCount{},
+	}
+}
+
+func (r *fakeStatsReader) DailyCounts(_ context.Context, shortURLID uuid.UUID, from, to time.Time) ([]stats.DailyCount, error) {
+	r.calledWith.shortURLID = shortURLID
+	r.calledWith.from = from
+	r.calledWith.to = to
+	return r.daily[shortURLID], nil
+}
+
+func (r *fakeStatsReader) ReferrerCounts(_ context.Context, shortURLID uuid.UUID, _, _ time.Time) ([]stats.ReferrerCount, error) {
+	return r.referrers[shortURLID], nil
+}
+
 type fakePermissions struct {
 	grants map[string]*permission.Grant
 	admins map[uuid.UUID]bool
@@ -765,6 +793,7 @@ type testDeps struct {
 	credentials  *fakeCredentials
 	sessions     *fakeSessions
 	shortURLs    *fakeShortURLStore
+	statsReader  *fakeStatsReader
 	permissions  *fakePermissions
 	cache        *fakeCacheInvalidator
 	mailer       *fakeMailer
@@ -782,6 +811,7 @@ func newTestServer() *testDeps {
 		credentials: newFakeCredentials(),
 		sessions:    newFakeSessions(),
 		shortURLs:   newFakeShortURLStore(),
+		statsReader: newFakeStatsReader(),
 		permissions: newFakePermissions(),
 		cache:       &fakeCacheInvalidator{},
 		mailer:      &fakeMailer{},
@@ -833,6 +863,7 @@ func newTestServer() *testDeps {
 		permissions:       d.permissions,
 		shortURLs:         &shorturl.Service{Store: d.shortURLs},
 		shortURLGet:       d.shortURLs,
+		stats:             &stats.Service{Reader: d.statsReader},
 		cache:             d.cache,
 		samlConfigs:       &auth.SAMLConfigService{Store: d.samlConfigs},
 		samlLogin:         d.samlLogin,
@@ -1098,6 +1129,175 @@ func TestHandleGetShortURL_AdminOverrideRecordsAudit(t *testing.T) {
 	// ある。
 	if resp.YourRole != "" || resp.CanEdit || resp.CanDelete || resp.CanManagePermissions {
 		t.Fatalf("expected AdminOverride access to be view-only with no role, got %+v", resp)
+	}
+}
+
+func TestHandleGetShortURLStats_OwnerSeesDailyAndReferrerBreakdown(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	owner, _ := d.authStore.CreateUser(ctx, "owner@example.com", true)
+	token, _ := d.sessions.Create(ctx, owner.ID, time.Hour)
+
+	created, err := d.server.shortURLs.Create(ctx, shorturl.CreateInput{DomainID: d.server.domainID, LongURL: "https://example.com", CreatedBy: owner.ID})
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+	d.permissions.grants[grantKey(created.ID, owner.ID)] = &permission.Grant{UserID: owner.ID, Role: permission.RoleOwner}
+	d.statsReader.daily[created.ID] = []stats.DailyCount{
+		{Date: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), ClickCount: 3},
+	}
+	d.statsReader.referrers[created.ID] = []stats.ReferrerCount{
+		{ReferrerHost: "google.com", ClickCount: 3},
+	}
+
+	req := withSessionCookie(httptest.NewRequest(http.MethodGet, "/api/short-urls/"+created.ID.String()+"/stats?from=2026-08-01&to=2026-08-07", nil), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp shortURLStatsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.From != "2026-08-01" || resp.To != "2026-08-07" {
+		t.Fatalf("expected the requested from/to to be echoed back, got %+v", resp)
+	}
+	if len(resp.Daily) != 1 || resp.Daily[0].ClickCount != 3 {
+		t.Fatalf("expected the daily breakdown to pass through, got %+v", resp.Daily)
+	}
+	if len(resp.ByReferrer) != 1 || resp.ByReferrer[0].ReferrerHost != "google.com" {
+		t.Fatalf("expected the referrer breakdown to pass through, got %+v", resp.ByReferrer)
+	}
+	if len(d.authStore.audit) != 0 {
+		t.Fatalf("an owner viewing their own URL's stats must not write a stats.admin_view audit entry, got %+v", d.authStore.audit)
+	}
+}
+
+func TestHandleGetShortURLStats_UnauthorizedUserGets404(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	owner, _ := d.authStore.CreateUser(ctx, "owner@example.com", true)
+	stranger, _ := d.authStore.CreateUser(ctx, "stranger@example.com", true)
+	token, _ := d.sessions.Create(ctx, stranger.ID, time.Hour)
+
+	created, err := d.server.shortURLs.Create(ctx, shorturl.CreateInput{DomainID: d.server.domainID, LongURL: "https://example.com", CreatedBy: owner.ID})
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+
+	req := withSessionCookie(httptest.NewRequest(http.MethodGet, "/api/short-urls/"+created.ID.String()+"/stats", nil), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 to conceal the URL's existence (4.2節), got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandleGetShortURLStats_NonexistentURLReturns404ForAdmin guards against
+// a real bug caught by manual smoke testing: resolveAccess's AdminOverride
+// is granted unconditionally from subject.IsSystemAdmin alone (it never
+// checks whether the short URL row actually exists), so without an
+// explicit existence check a system_admin querying a nonexistent id would
+// sail straight through to GetStats and get back an empty-but-200 result
+// instead of 404.
+func TestHandleGetShortURLStats_NonexistentURLReturns404ForAdmin(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	admin, _ := d.authStore.CreateUser(ctx, "admin@example.com", true)
+	d.permissions.admins[admin.ID] = true
+	token, _ := d.sessions.Create(ctx, admin.ID, time.Hour)
+
+	req := withSessionCookie(httptest.NewRequest(http.MethodGet, "/api/short-urls/"+uuid.New().String()+"/stats", nil), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for a nonexistent short URL even under AdminOverride, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleGetShortURLStats_AdminOverrideRecordsAudit(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	owner, _ := d.authStore.CreateUser(ctx, "owner@example.com", true)
+	admin, _ := d.authStore.CreateUser(ctx, "admin@example.com", true)
+	d.permissions.admins[admin.ID] = true
+	token, _ := d.sessions.Create(ctx, admin.ID, time.Hour)
+
+	created, err := d.server.shortURLs.Create(ctx, shorturl.CreateInput{DomainID: d.server.domainID, LongURL: "https://example.com", CreatedBy: owner.ID})
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+
+	req := withSessionCookie(httptest.NewRequest(http.MethodGet, "/api/short-urls/"+created.ID.String()+"/stats", nil), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 (system_admin override), got %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(d.authStore.audit) != 1 || d.authStore.audit[0].Action != "stats.admin_view" {
+		t.Fatalf("expected one stats.admin_view audit entry (4.1節), got %+v", d.authStore.audit)
+	}
+}
+
+func TestHandleGetShortURLStats_DefaultsToTrailing30Days(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	owner, _ := d.authStore.CreateUser(ctx, "owner@example.com", true)
+	token, _ := d.sessions.Create(ctx, owner.ID, time.Hour)
+
+	created, err := d.server.shortURLs.Create(ctx, shorturl.CreateInput{DomainID: d.server.domainID, LongURL: "https://example.com", CreatedBy: owner.ID})
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+	d.permissions.grants[grantKey(created.ID, owner.ID)] = &permission.Grant{UserID: owner.ID, Role: permission.RoleOwner}
+
+	req := withSessionCookie(httptest.NewRequest(http.MethodGet, "/api/short-urls/"+created.ID.String()+"/stats", nil), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp shortURLStatsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	from, _ := time.Parse(statsDateLayout, resp.From)
+	to, _ := time.Parse(statsDateLayout, resp.To)
+	if days := to.Sub(from).Hours() / 24; days != 29 {
+		t.Fatalf("expected a default 30-day window (29 days between from and to), got %v to %v (%v days)", resp.From, resp.To, days)
+	}
+}
+
+func TestHandleGetShortURLStats_InvalidRangeReturns400(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	owner, _ := d.authStore.CreateUser(ctx, "owner@example.com", true)
+	token, _ := d.sessions.Create(ctx, owner.ID, time.Hour)
+
+	created, err := d.server.shortURLs.Create(ctx, shorturl.CreateInput{DomainID: d.server.domainID, LongURL: "https://example.com", CreatedBy: owner.ID})
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+	d.permissions.grants[grantKey(created.ID, owner.ID)] = &permission.Grant{UserID: owner.ID, Role: permission.RoleOwner}
+
+	req := withSessionCookie(httptest.NewRequest(http.MethodGet, "/api/short-urls/"+created.ID.String()+"/stats?from=2026-08-10&to=2026-08-01", nil), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for to before from, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
