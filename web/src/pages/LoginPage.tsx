@@ -4,15 +4,31 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ApiError, api } from "../api/client";
 import type { PublicOIDCIdP, PublicSAMLIdP } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
+import { loginWithPasskey } from "../lib/webauthn";
 
 export function LoginPage() {
 	const [email, setEmail] = useState("");
 	const [password, setPassword] = useState("");
 	const [error, setError] = useState<string | null>(null);
 	const [submitting, setSubmitting] = useState(false);
+	const [passkeySubmitting, setPasskeySubmitting] = useState(false);
 	const navigate = useNavigate();
 	const { refetch } = useAuth();
 	const [searchParams] = useSearchParams();
+
+	async function handlePasskeyLogin() {
+		setError(null);
+		setPasskeySubmitting(true);
+		try {
+			await loginWithPasskey();
+			await refetch();
+			navigate("/");
+		} catch {
+			setError("パスキーでのログインに失敗しました");
+		} finally {
+			setPasskeySubmitting(false);
+		}
+	}
 
 	const samlIdpsQuery = useQuery({
 		queryKey: ["auth", "saml", "idps"],
@@ -73,6 +89,22 @@ export function LoginPage() {
 					SSOログインに失敗しました。もう一度お試しください。
 				</p>
 			)}
+
+			<div className="mb-6 flex flex-col gap-2">
+				<button
+					type="button"
+					disabled={passkeySubmitting}
+					onClick={handlePasskeyLogin}
+					className="rounded border border-gray-300 px-4 py-2 text-center hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:hover:bg-gray-800"
+				>
+					{passkeySubmitting ? "確認中…" : "パスキーでログイン"}
+				</button>
+				<div className="my-2 flex items-center gap-3 text-xs text-gray-400">
+					<span className="h-px flex-1 bg-gray-200 dark:bg-gray-700" />
+					または
+					<span className="h-px flex-1 bg-gray-200 dark:bg-gray-700" />
+				</div>
+			</div>
 
 			{hasSSOOptions && (
 				<div className="mb-6 flex flex-col gap-2">

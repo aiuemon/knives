@@ -310,6 +310,72 @@ func TestLocalCredentialStore_SetPasswordAndFailureTracking(t *testing.T) {
 	}
 }
 
+func TestWebAuthnCredentialStore_CreateFindUpdateDelete(t *testing.T) {
+	pool := setupPostgres(t)
+	authStore := storage.NewAuthStore(pool)
+	credStore := storage.NewWebAuthnCredentialStore(pool)
+	ctx := context.Background()
+
+	user, err := authStore.CreateUser(ctx, "passkey-user@example.com", true)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	credentialID := []byte("test-credential-id-1")
+	cred := auth.WebAuthnCredential{
+		UserID:       user.ID,
+		CredentialID: credentialID,
+		PublicKey:    []byte("test-public-key"),
+		SignCount:    0,
+		Transports:   []string{"internal", "hybrid"},
+	}
+	if err := credStore.CreateWebAuthnCredential(ctx, cred); err != nil {
+		t.Fatalf("CreateWebAuthnCredential: %v", err)
+	}
+
+	// credential_idのUNIQUE制約は登録済みcredentialの再登録を弾く
+	// (ErrWebAuthnCredentialAlreadyRegistered、別ユーザによる再登録の
+	// 試みも同様に弾かれる想定)。
+	if err := credStore.CreateWebAuthnCredential(ctx, cred); !errors.Is(err, auth.ErrWebAuthnCredentialAlreadyRegistered) {
+		t.Fatalf("expected ErrWebAuthnCredentialAlreadyRegistered on a duplicate credential_id, got %v", err)
+	}
+
+	found, err := credStore.FindWebAuthnCredentialsByUserID(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("FindWebAuthnCredentialsByUserID: %v", err)
+	}
+	if len(found) != 1 || found[0].SignCount != 0 || len(found[0].Transports) != 2 {
+		t.Fatalf("expected exactly the one credential just created, got %+v", found)
+	}
+	credentialRowID := found[0].ID
+
+	if err := credStore.UpdateWebAuthnCredentialSignCount(ctx, credentialID, 42); err != nil {
+		t.Fatalf("UpdateWebAuthnCredentialSignCount: %v", err)
+	}
+	updated, err := credStore.FindWebAuthnCredentialsByUserID(ctx, user.ID)
+	if err != nil || len(updated) != 1 || updated[0].SignCount != 42 {
+		t.Fatalf("expected sign_count=42 after update, got %+v (err=%v)", updated, err)
+	}
+
+	// 他ユーザのIDを渡した削除はErrNotFound(4.2節と同種の、所有者スコープの
+	// 徹底: 他人のcredential idを推測してもDELETEできない)。
+	stranger, err := authStore.CreateUser(ctx, "stranger@example.com", true)
+	if err != nil {
+		t.Fatalf("CreateUser (stranger): %v", err)
+	}
+	if err := credStore.DeleteWebAuthnCredential(ctx, credentialRowID, stranger.ID); !errors.Is(err, auth.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound when deleting with the wrong owner, got %v", err)
+	}
+
+	if err := credStore.DeleteWebAuthnCredential(ctx, credentialRowID, user.ID); err != nil {
+		t.Fatalf("DeleteWebAuthnCredential: %v", err)
+	}
+	remaining, err := credStore.FindWebAuthnCredentialsByUserID(ctx, user.ID)
+	if err != nil || len(remaining) != 0 {
+		t.Fatalf("expected no credentials left after delete, got %+v (err=%v)", remaining, err)
+	}
+}
+
 func TestLocalSignupVerificationStore_CreateFindDelete(t *testing.T) {
 	pool := setupPostgres(t)
 	store := storage.NewLocalSignupVerificationStore(pool)

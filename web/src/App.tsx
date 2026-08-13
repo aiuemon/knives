@@ -1,6 +1,7 @@
 import { Route, Routes } from "react-router-dom";
 import { AdminRoute } from "./components/AdminRoute";
 import { ProtectedRoute } from "./components/ProtectedRoute";
+import { AccountSettingsPage } from "./pages/AccountSettingsPage";
 import { AdminOIDCConfigsPage } from "./pages/AdminOIDCConfigsPage";
 import { AdminSAMLConfigsPage } from "./pages/AdminSAMLConfigsPage";
 import { AdminSettingsPage } from "./pages/AdminSettingsPage";
@@ -34,6 +35,14 @@ function App() {
 				element={
 					<ProtectedRoute>
 						<PendingLinksPage />
+					</ProtectedRoute>
+				}
+			/>
+			<Route
+				path="/account"
+				element={
+					<ProtectedRoute>
+						<AccountSettingsPage />
 					</ProtectedRoute>
 				}
 			/>

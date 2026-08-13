@@ -84,6 +84,14 @@ export interface PendingLink {
 	expires_at: string;
 }
 
+// WebAuthnCredential is one registered passkey (3.1節). id is the DB row
+// id (used to revoke it) — the raw credential_id/public_key are never
+// exposed to the client.
+export interface WebAuthnCredential {
+	id: string;
+	transports?: string[];
+}
+
 export interface AuthSettings {
 	local_auth_enabled: boolean;
 	self_signup_enabled: boolean;

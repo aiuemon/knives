@@ -25,6 +25,12 @@ export function Header() {
 					>
 						保留中の統合リクエスト
 					</Link>
+					<Link
+						to="/account"
+						className="text-gray-600 hover:underline dark:text-gray-300"
+					>
+						アカウント設定
+					</Link>
 					{user.is_system_admin && (
 						<Link
 							to="/admin/settings"

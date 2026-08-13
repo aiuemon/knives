@@ -1,10 +1,15 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthProvider } from "../auth/AuthContext";
+import { loginWithPasskey } from "../lib/webauthn";
 import { LoginPage } from "./LoginPage";
+
+vi.mock("../lib/webauthn", () => ({
+	loginWithPasskey: vi.fn(),
+}));
 
 function renderLoginPage(initialEntries = ["/login"]) {
 	const queryClient = new QueryClient({
@@ -119,6 +124,32 @@ describe("LoginPage", () => {
 		renderLoginPage(["/login?error=oidc_failed"]);
 		expect(
 			await screen.findByText(/SSOログインに失敗しました/),
+		).toBeInTheDocument();
+	});
+
+	it("triggers a passkey login when the passkey button is clicked", async () => {
+		vi.mocked(loginWithPasskey).mockResolvedValue(undefined);
+		renderLoginPage();
+
+		const user = userEvent.setup();
+		await user.click(
+			await screen.findByRole("button", { name: "パスキーでログイン" }),
+		);
+
+		await waitFor(() => expect(loginWithPasskey).toHaveBeenCalled());
+	});
+
+	it("shows an error message when the passkey login fails", async () => {
+		vi.mocked(loginWithPasskey).mockRejectedValue(new Error("cancelled"));
+		renderLoginPage();
+
+		const user = userEvent.setup();
+		await user.click(
+			await screen.findByRole("button", { name: "パスキーでログイン" }),
+		);
+
+		expect(
+			await screen.findByText("パスキーでのログインに失敗しました"),
 		).toBeInTheDocument();
 	});
 });

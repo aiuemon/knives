@@ -26,6 +26,7 @@ type Querier interface {
 	DeleteOIDCConfig(ctx context.Context, id uuid.UUID) (int64, error)
 	DeleteSAMLConfig(ctx context.Context, id uuid.UUID) (int64, error)
 	DeleteURLPermission(ctx context.Context, arg DeleteURLPermissionParams) error
+	DeleteWebAuthnCredential(ctx context.Context, arg DeleteWebAuthnCredentialParams) (int64, error)
 	FindAdminUserByID(ctx context.Context, id uuid.UUID) (*FindAdminUserByIDRow, error)
 	FindAuthIdentity(ctx context.Context, arg FindAuthIdentityParams) (*FindAuthIdentityRow, error)
 	FindAuthSettings(ctx context.Context) (*FindAuthSettingsRow, error)
@@ -46,9 +47,11 @@ type Querier interface {
 	FindURLPermission(ctx context.Context, arg FindURLPermissionParams) (UrlPermissionRole, error)
 	FindUserByEmail(ctx context.Context, email string) (*FindUserByEmailRow, error)
 	FindUserByID(ctx context.Context, id uuid.UUID) (*FindUserByIDRow, error)
+	FindWebAuthnCredentialsByUserID(ctx context.Context, userID uuid.UUID) ([]*WebauthnCredential, error)
 	InsertClickEvent(ctx context.Context, arg InsertClickEventParams) (int64, error)
 	InsertShortURL(ctx context.Context, arg InsertShortURLParams) (*InsertShortURLRow, error)
 	InsertURLPermission(ctx context.Context, arg InsertURLPermissionParams) error
+	InsertWebAuthnCredential(ctx context.Context, arg InsertWebAuthnCredentialParams) error
 	ListOIDCConfigs(ctx context.Context) ([]*IdpOidcConfig, error)
 	ListSAMLConfigs(ctx context.Context) ([]*IdpSamlConfig, error)
 	ListURLPermissions(ctx context.Context, shortUrlID uuid.UUID) ([]*ListURLPermissionsRow, error)
@@ -69,6 +72,7 @@ type Querier interface {
 	// parameterize a dynamic ORDER BY column, which this listing needs to let
 	// every displayed field be sortable.
 	UpdateShortURLFields(ctx context.Context, arg UpdateShortURLFieldsParams) (*ShortUrl, error)
+	UpdateWebAuthnCredentialSignCount(ctx context.Context, arg UpdateWebAuthnCredentialSignCountParams) error
 	UpsertClickStatsDaily(ctx context.Context, arg UpsertClickStatsDailyParams) error
 	UpsertLocalCredentialPassword(ctx context.Context, arg UpsertLocalCredentialPasswordParams) error
 	UpsertURLPermission(ctx context.Context, arg UpsertURLPermissionParams) error
