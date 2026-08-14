@@ -49,6 +49,10 @@ type Querier interface {
 	FindUserByID(ctx context.Context, id uuid.UUID) (*FindUserByIDRow, error)
 	FindWebAuthnCredentialsByUserID(ctx context.Context, userID uuid.UUID) ([]*WebauthnCredential, error)
 	InsertClickEvent(ctx context.Context, arg InsertClickEventParams) (int64, error)
+	// cmd/migrate-yourls専用(10節)。status/sourceは移行データに常に固定の値
+	// ('active'/'yourls_import')のためリテラルで埋め込み、created_atは
+	// YOURLS側のtimestampをそのまま引き継ぐ(通常のInsertShortURLはnow()任せ)。
+	InsertMigratedShortURL(ctx context.Context, arg InsertMigratedShortURLParams) (uuid.UUID, error)
 	InsertShortURL(ctx context.Context, arg InsertShortURLParams) (*InsertShortURLRow, error)
 	InsertURLPermission(ctx context.Context, arg InsertURLPermissionParams) error
 	InsertWebAuthnCredential(ctx context.Context, arg InsertWebAuthnCredentialParams) error
@@ -59,6 +63,11 @@ type Querier interface {
 	RecordAuditLog(ctx context.Context, arg RecordAuditLogParams) error
 	RecordFailedLoginAttempt(ctx context.Context, arg RecordFailedLoginAttemptParams) error
 	ResetFailedLoginAttempts(ctx context.Context, userID uuid.UUID) error
+	// 通常の運用中の集計(UpsertClickStatsDaily)は既存値に加算するが、移行は
+	// 「移行時点までの累計値を1レコードとして投入する」(10節)ため、
+	// 加算ではなく上書きする。再実行時に同じ日付・同じ値で入れ直しても
+	// 安全(冪等)。
+	SetMigratedClickStatsDaily(ctx context.Context, arg SetMigratedClickStatsDailyParams) error
 	SetShortURLStatus(ctx context.Context, arg SetShortURLStatusParams) error
 	SetSystemAdmin(ctx context.Context, arg SetSystemAdminParams) (int64, error)
 	SetUserStatus(ctx context.Context, arg SetUserStatusParams) (int64, error)
