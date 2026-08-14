@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/google/uuid"
 
 	"github.com/aiuemon/knives/internal/auth"
@@ -31,6 +32,19 @@ type samlLoginService interface {
 type oidcLoginService interface {
 	BeginLogin(ctx context.Context, configID uuid.UUID) (string, error)
 	HandleCallback(ctx context.Context, configID uuid.UUID, r *http.Request) (*auth.Result, error)
+}
+
+// webauthnAuthenticator is the subset of *auth.WebAuthnService the
+// register/login handlers need; declared here for the same testability
+// reason as samlLoginService — in particular, it lets handler tests
+// exercise the FinishRegistration/FinishLogin *success* path (e.g.
+// asserting what the HTTP response actually looks like) without driving a
+// real FIDO2 authenticator ceremony through go-webauthn.
+type webauthnAuthenticator interface {
+	BeginRegistration(ctx context.Context, userID uuid.UUID) (*protocol.CredentialCreation, string, error)
+	FinishRegistration(ctx context.Context, userID uuid.UUID, ceremonyID string, r *http.Request) error
+	BeginLogin(ctx context.Context) (*protocol.CredentialAssertion, string, error)
+	FinishLogin(ctx context.Context, ceremonyID string, r *http.Request) (*auth.User, error)
 }
 
 // permissionChecker is the subset of storage.PermissionStore the API
@@ -75,7 +89,7 @@ type server struct {
 	samlLogin           samlLoginService
 	oidcConfigs         *auth.OIDCConfigService
 	oidcLogin           oidcLoginService
-	webauthn            *auth.WebAuthnService
+	webauthn            webauthnAuthenticator
 	webauthnCredentials auth.WebAuthnCredentialStore
 
 	domainID uuid.UUID

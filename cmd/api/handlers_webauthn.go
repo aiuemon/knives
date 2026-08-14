@@ -69,7 +69,11 @@ func (s *server) handleWebAuthnRegisterFinish(w http.ResponseWriter, r *http.Req
 		http.Error(w, "invalid passkey registration", http.StatusBadRequest)
 		return
 	}
-	w.WriteHeader(http.StatusCreated)
+	// bodyの無い201はこのコードベースの他の201レスポンス(handleCreateShortURL
+	// 等)の慣習から外れており、web/src/api/client.tsのrequest()は204以外は
+	// 常にres.json()を呼ぶ前提のため、空bodyだとJSONパースに失敗して
+	// フロント側が「登録成功したのに失敗と表示される」不具合になる。
+	writeJSON(w, http.StatusCreated, struct{}{})
 }
 
 // handleWebAuthnLoginBegin starts a usernameless (discoverable-credential)

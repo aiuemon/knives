@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/google/uuid"
 
@@ -842,6 +843,34 @@ func (f *fakeOIDCLoginService) HandleCallback(ctx context.Context, configID uuid
 	return f.handleCallbackFunc(ctx, configID, r)
 }
 
+// fakeWebAuthnAuthenticator lets handler tests drive the
+// FinishRegistration/FinishLogin *success* path — something a real
+// *auth.WebAuthnService can't do in a unit test without an actual FIDO2
+// authenticator ceremony (see internal/auth/webauthn_test.go's scope
+// note). Unset funcs panic on call, same convention as the other fakes.
+type fakeWebAuthnAuthenticator struct {
+	beginRegistrationFunc  func(ctx context.Context, userID uuid.UUID) (*protocol.CredentialCreation, string, error)
+	finishRegistrationFunc func(ctx context.Context, userID uuid.UUID, ceremonyID string, r *http.Request) error
+	beginLoginFunc         func(ctx context.Context) (*protocol.CredentialAssertion, string, error)
+	finishLoginFunc        func(ctx context.Context, ceremonyID string, r *http.Request) (*auth.User, error)
+}
+
+func (f *fakeWebAuthnAuthenticator) BeginRegistration(ctx context.Context, userID uuid.UUID) (*protocol.CredentialCreation, string, error) {
+	return f.beginRegistrationFunc(ctx, userID)
+}
+
+func (f *fakeWebAuthnAuthenticator) FinishRegistration(ctx context.Context, userID uuid.UUID, ceremonyID string, r *http.Request) error {
+	return f.finishRegistrationFunc(ctx, userID, ceremonyID, r)
+}
+
+func (f *fakeWebAuthnAuthenticator) BeginLogin(ctx context.Context) (*protocol.CredentialAssertion, string, error) {
+	return f.beginLoginFunc(ctx)
+}
+
+func (f *fakeWebAuthnAuthenticator) FinishLogin(ctx context.Context, ceremonyID string, r *http.Request) (*auth.User, error) {
+	return f.finishLoginFunc(ctx, ceremonyID, r)
+}
+
 type testDeps struct {
 	server              *server
 	authStore           *fakeAuthStore
@@ -1068,6 +1097,43 @@ func TestHandleWebAuthnRegisterFinish_UnknownCeremonyReturns400(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for an unknown/expired ceremony, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandleWebAuthnRegisterFinish_SuccessReturnsADecodableBody guards
+// against a real bug found via manual browser testing: the handler wrote
+// a bare 201 with no body, but web/src/api/client.ts's request() calls
+// res.json() for every non-204 response — so a successful registration
+// (the credential really was created) still surfaced to the user as
+// "パスキーの登録に失敗しました", because the empty body failed to parse
+// as JSON on the client. Every other 201 response in this codebase
+// includes a JSON body (see e.g. handleCreateShortURL); this one didn't.
+func TestHandleWebAuthnRegisterFinish_SuccessReturnsADecodableBody(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	user, _ := d.authStore.CreateUser(ctx, "user@example.com", true)
+	token, _ := d.sessions.Create(ctx, user.ID, time.Hour)
+
+	d.server.webauthn = &fakeWebAuthnAuthenticator{
+		finishRegistrationFunc: func(context.Context, uuid.UUID, string, *http.Request) error {
+			return nil
+		},
+	}
+
+	req := withSessionCookie(httptest.NewRequest(http.MethodPost, "/api/auth/webauthn/register/finish?ceremony_id=some-ceremony", nil), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if rec.Body.Len() == 0 {
+		t.Fatalf("expected a non-empty JSON body (client always calls res.json() on non-204 responses), got an empty body")
+	}
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("expected the body to be valid JSON, got decode error: %v", err)
 	}
 }
 
