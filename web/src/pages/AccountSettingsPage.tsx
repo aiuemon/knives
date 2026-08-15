@@ -6,12 +6,16 @@ import { Header } from "../components/Header";
 import { PencilIcon, TrashIcon } from "../components/icons";
 import { registerPasskey } from "../lib/webauthn";
 
+// WebAuthn仕様(W3C, §5.8.4 Authenticator Transport Enumeration)の
+// IDL値をそのまま技術用語として表示する(翻訳しない方針、ユーザ確認済み)。
+// https://www.w3.org/TR/webauthn-3/#enumdef-authenticatortransport
 const TRANSPORT_LABELS: Record<string, string> = {
-	internal: "端末内蔵(指紋・顔認証など)",
-	hybrid: "別端末(QRコード連携)",
-	usb: "USBセキュリティキー",
-	nfc: "NFCセキュリティキー",
-	ble: "Bluetoothセキュリティキー",
+	internal: "Internal",
+	hybrid: "Hybrid",
+	usb: "USB",
+	nfc: "NFC",
+	ble: "BLE",
+	"smart-card": "Smart Card",
 };
 
 function formatDateTime(iso: string) {

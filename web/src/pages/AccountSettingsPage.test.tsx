@@ -85,7 +85,28 @@ describe("AccountSettingsPage", () => {
 	it("lists registered passkeys with their name and transport label", async () => {
 		renderPage([credential]);
 		expect(await screen.findByText("会社支給MacBook")).toBeInTheDocument();
-		expect(screen.getByText("端末内蔵(指紋・顔認証など)")).toBeInTheDocument();
+		// WebAuthn仕様の技術用語表記(翻訳しない、ユーザ確認済み)。
+		expect(screen.getByText("Internal")).toBeInTheDocument();
+	});
+
+	it("shows every known transport using WebAuthn spec terminology", async () => {
+		renderPage([
+			{
+				...credential,
+				id: "cred-3",
+				transports: ["hybrid", "usb", "nfc", "ble", "smart-card"],
+			},
+		]);
+		expect(
+			await screen.findByText("Hybrid / USB / NFC / BLE / Smart Card"),
+		).toBeInTheDocument();
+	});
+
+	it("falls back to the raw transport value for an unrecognized transport", async () => {
+		renderPage([
+			{ ...credential, id: "cred-4", transports: ["future-transport"] },
+		]);
+		expect(await screen.findByText("future-transport")).toBeInTheDocument();
 	});
 
 	it("shows registration date and 未使用 when the passkey has never been used", async () => {
