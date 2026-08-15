@@ -64,6 +64,23 @@ type WebAuthnCredential struct {
 	// log in at least once (registering it doesn't count — that happens
 	// on an already-authenticated session).
 	LastUsedAt *time.Time
+	// UserPresent/UserVerified/BackupEligible/BackupState mirror
+	// go-webauthn's webauthn.CredentialFlags (captured from the
+	// authenticator's response). These MUST be persisted and restored on
+	// every ceremony per go-webauthn's own storage documentation
+	// (webauthn/doc.go, "Storage"): validateLogin rejects the login
+	// outright if the stored BackupEligible doesn't match what the
+	// current assertion reports, so leaving these as the zero value (as
+	// this package originally did) makes login fail for every
+	// backup-eligible/synced passkey — which is the norm for iCloud
+	// Keychain, Google Password Manager, etc. BackupEligible never
+	// changes once set; BackupState can, and WebAuthnService.
+	// applyLoginResult writes the latest value back after every
+	// successful login.
+	UserPresent    bool
+	UserVerified   bool
+	BackupEligible bool
+	BackupState    bool
 }
 
 // WebAuthnCredentialStore is the persistence port for webauthn_credentials.
@@ -77,9 +94,11 @@ type WebAuthnCredentialStore interface {
 	// Returns ErrWebAuthnCredentialAlreadyRegistered on a credential_id
 	// collision.
 	CreateWebAuthnCredential(ctx context.Context, cred WebAuthnCredential) error
-	// UpdateWebAuthnCredentialSignCount persists the authenticator's latest
-	// counter value and last_used_at after a successful login.
-	UpdateWebAuthnCredentialSignCount(ctx context.Context, credentialID []byte, signCount uint32) error
+	// UpdateWebAuthnCredentialSignCount persists the authenticator's
+	// latest counter value, backup_state, and last_used_at after a
+	// successful login (the fields go-webauthn's storage documentation
+	// says change across assertions and must be written back every time).
+	UpdateWebAuthnCredentialSignCount(ctx context.Context, credentialID []byte, signCount uint32, backupState bool) error
 	// UpdateWebAuthnCredentialName renames id, scoped to userID (same
 	// ownership rule as DeleteWebAuthnCredential). Returns ErrNotFound if
 	// id doesn't exist or isn't owned by userID.

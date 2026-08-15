@@ -62,6 +62,12 @@ func (u *webauthnUser) WebAuthnCredentials() []webauthn.Credential {
 			ID:        c.CredentialID,
 			PublicKey: c.PublicKey,
 			Transport: transports,
+			Flags: webauthn.CredentialFlags{
+				UserPresent:    c.UserPresent,
+				UserVerified:   c.UserVerified,
+				BackupEligible: c.BackupEligible,
+				BackupState:    c.BackupState,
+			},
 			Authenticator: webauthn.Authenticator{
 				SignCount: c.SignCount,
 			},
@@ -178,12 +184,16 @@ func (s *WebAuthnService) FinishRegistration(ctx context.Context, userID uuid.UU
 		transports = append(transports, string(t))
 	}
 	return s.Credentials.CreateWebAuthnCredential(ctx, WebAuthnCredential{
-		UserID:       userID,
-		CredentialID: credential.ID,
-		PublicKey:    credential.PublicKey,
-		SignCount:    credential.Authenticator.SignCount,
-		Transports:   transports,
-		Name:         name,
+		UserID:         userID,
+		CredentialID:   credential.ID,
+		PublicKey:      credential.PublicKey,
+		SignCount:      credential.Authenticator.SignCount,
+		Transports:     transports,
+		Name:           name,
+		UserPresent:    credential.Flags.UserPresent,
+		UserVerified:   credential.Flags.UserVerified,
+		BackupEligible: credential.Flags.BackupEligible,
+		BackupState:    credential.Flags.BackupState,
 	})
 }
 
@@ -250,5 +260,5 @@ func (s *WebAuthnService) applyLoginResult(ctx context.Context, credential *weba
 	if credential.Authenticator.CloneWarning {
 		return ErrWebAuthnCredentialCloned
 	}
-	return s.Credentials.UpdateWebAuthnCredentialSignCount(ctx, credential.ID, credential.Authenticator.SignCount)
+	return s.Credentials.UpdateWebAuthnCredentialSignCount(ctx, credential.ID, credential.Authenticator.SignCount, credential.Flags.BackupState)
 }

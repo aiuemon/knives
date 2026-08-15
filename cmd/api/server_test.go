@@ -489,7 +489,7 @@ func (s *fakeWebAuthnCredentialStore) CreateWebAuthnCredential(_ context.Context
 	return nil
 }
 
-func (s *fakeWebAuthnCredentialStore) UpdateWebAuthnCredentialSignCount(_ context.Context, _ []byte, _ uint32) error {
+func (s *fakeWebAuthnCredentialStore) UpdateWebAuthnCredentialSignCount(_ context.Context, _ []byte, _ uint32, _ bool) error {
 	return nil
 }
 

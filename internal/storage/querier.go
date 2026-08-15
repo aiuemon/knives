@@ -82,8 +82,10 @@ type Querier interface {
 	// every displayed field be sortable.
 	UpdateShortURLFields(ctx context.Context, arg UpdateShortURLFieldsParams) (*ShortUrl, error)
 	UpdateWebAuthnCredentialName(ctx context.Context, arg UpdateWebAuthnCredentialNameParams) (*WebauthnCredential, error)
-	// ログイン成功のたびに呼ばれる(WebAuthnService.applyLoginResult)ため、
-	// sign_countと合わせてlast_used_atも更新する。
+	// ログイン成功のたびに呼ばれる(WebAuthnService.applyLoginResult)。
+	// go-webauthnのストレージ指針(webauthn/doc.go)により、sign_countと
+	// last_used_atに加えbackup_state(変化しうる値)も毎回書き戻す。
+	// backup_eligibleは登録時から変化しない値のためここでは更新しない。
 	UpdateWebAuthnCredentialSignCount(ctx context.Context, arg UpdateWebAuthnCredentialSignCountParams) error
 	UpsertClickStatsDaily(ctx context.Context, arg UpsertClickStatsDailyParams) error
 	UpsertLocalCredentialPassword(ctx context.Context, arg UpsertLocalCredentialPasswordParams) error
