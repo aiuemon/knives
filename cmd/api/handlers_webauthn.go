@@ -115,6 +115,11 @@ func (s *server) handleWebAuthnLoginFinish(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "passkey verification failed", http.StatusUnauthorized)
 		return
 	case err != nil:
+		// FinishLoginの失敗理由の大半(署名検証失敗・challenge不一致・
+		// user handle解決失敗等)を診断できるよう、handleWebAuthnRegisterFinish
+		// と同様にログへ残す(以前はここが完全に無音で、原因調査ができ
+		// なかった)。
+		slog.Warn("webauthn finish login rejected", "error", err)
 		http.Error(w, "passkey login failed", http.StatusUnauthorized)
 		return
 	}

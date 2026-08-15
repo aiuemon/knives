@@ -36,12 +36,16 @@ func (s *WebAuthnCredentialStore) FindWebAuthnCredentialsByUserID(ctx context.Co
 
 func (s *WebAuthnCredentialStore) CreateWebAuthnCredential(ctx context.Context, cred auth.WebAuthnCredential) error {
 	err := s.Q.InsertWebAuthnCredential(ctx, InsertWebAuthnCredentialParams{
-		UserID:       cred.UserID,
-		CredentialID: cred.CredentialID,
-		PublicKey:    cred.PublicKey,
-		SignCount:    int64(cred.SignCount),
-		Transports:   cred.Transports,
-		Name:         textOrNull(cred.Name),
+		UserID:         cred.UserID,
+		CredentialID:   cred.CredentialID,
+		PublicKey:      cred.PublicKey,
+		SignCount:      int64(cred.SignCount),
+		Transports:     cred.Transports,
+		Name:           textOrNull(cred.Name),
+		UserPresent:    cred.UserPresent,
+		UserVerified:   cred.UserVerified,
+		BackupEligible: cred.BackupEligible,
+		BackupState:    cred.BackupState,
 	})
 	if isUniqueViolation(err) {
 		return auth.ErrWebAuthnCredentialAlreadyRegistered
@@ -49,10 +53,11 @@ func (s *WebAuthnCredentialStore) CreateWebAuthnCredential(ctx context.Context, 
 	return err
 }
 
-func (s *WebAuthnCredentialStore) UpdateWebAuthnCredentialSignCount(ctx context.Context, credentialID []byte, signCount uint32) error {
+func (s *WebAuthnCredentialStore) UpdateWebAuthnCredentialSignCount(ctx context.Context, credentialID []byte, signCount uint32, backupState bool) error {
 	return s.Q.UpdateWebAuthnCredentialSignCount(ctx, UpdateWebAuthnCredentialSignCountParams{
 		CredentialID: credentialID,
 		SignCount:    int64(signCount),
+		BackupState:  backupState,
 	})
 }
 
@@ -85,14 +90,18 @@ func (s *WebAuthnCredentialStore) DeleteWebAuthnCredential(ctx context.Context, 
 
 func toDomainWebAuthnCredential(row *WebauthnCredential) auth.WebAuthnCredential {
 	cred := auth.WebAuthnCredential{
-		ID:           row.ID,
-		UserID:       row.UserID,
-		CredentialID: row.CredentialID,
-		PublicKey:    row.PublicKey,
-		SignCount:    uint32(row.SignCount),
-		Transports:   row.Transports,
-		Name:         row.Name.String,
-		CreatedAt:    row.CreatedAt.Time,
+		ID:             row.ID,
+		UserID:         row.UserID,
+		CredentialID:   row.CredentialID,
+		PublicKey:      row.PublicKey,
+		SignCount:      uint32(row.SignCount),
+		Transports:     row.Transports,
+		Name:           row.Name.String,
+		CreatedAt:      row.CreatedAt.Time,
+		UserPresent:    row.UserPresent,
+		UserVerified:   row.UserVerified,
+		BackupEligible: row.BackupEligible,
+		BackupState:    row.BackupState,
 	}
 	if row.LastUsedAt.Valid {
 		t := row.LastUsedAt.Time

@@ -388,13 +388,17 @@ type User struct {
 }
 
 type WebauthnCredential struct {
-	ID           uuid.UUID          `json:"id"`
-	UserID       uuid.UUID          `json:"user_id"`
-	CredentialID []byte             `json:"credential_id"`
-	PublicKey    []byte             `json:"public_key"`
-	SignCount    int64              `json:"sign_count"`
-	Transports   []string           `json:"transports"`
-	Name         pgtype.Text        `json:"name"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	LastUsedAt   pgtype.Timestamptz `json:"last_used_at"`
+	ID             uuid.UUID          `json:"id"`
+	UserID         uuid.UUID          `json:"user_id"`
+	CredentialID   []byte             `json:"credential_id"`
+	PublicKey      []byte             `json:"public_key"`
+	SignCount      int64              `json:"sign_count"`
+	Transports     []string           `json:"transports"`
+	Name           pgtype.Text        `json:"name"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	LastUsedAt     pgtype.Timestamptz `json:"last_used_at"`
+	UserPresent    bool               `json:"user_present"`
+	UserVerified   bool               `json:"user_verified"`
+	BackupEligible bool               `json:"backup_eligible"`
+	BackupState    bool               `json:"backup_state"`
 }

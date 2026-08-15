@@ -35,6 +35,7 @@ func setupPostgres(t *testing.T) *pgxpool.Pool {
 			filepath.Join("..", "..", "db", "migrations", "0003_auth_settings_reauth_confirmation.up.sql"),
 			filepath.Join("..", "..", "db", "migrations", "0004_click_events_stream_id.up.sql"),
 			filepath.Join("..", "..", "db", "migrations", "0005_webauthn_credential_metadata.up.sql"),
+			filepath.Join("..", "..", "db", "migrations", "0006_webauthn_credential_flags.up.sql"),
 		),
 		postgres.WithDatabase("knives_test"),
 		postgres.WithUsername("knives"),
@@ -324,12 +325,16 @@ func TestWebAuthnCredentialStore_CreateFindUpdateDelete(t *testing.T) {
 
 	credentialID := []byte("test-credential-id-1")
 	cred := auth.WebAuthnCredential{
-		UserID:       user.ID,
-		CredentialID: credentialID,
-		PublicKey:    []byte("test-public-key"),
-		SignCount:    0,
-		Transports:   []string{"internal", "hybrid"},
-		Name:         "会社支給MacBook",
+		UserID:         user.ID,
+		CredentialID:   credentialID,
+		PublicKey:      []byte("test-public-key"),
+		SignCount:      0,
+		Transports:     []string{"internal", "hybrid"},
+		Name:           "会社支給MacBook",
+		UserPresent:    true,
+		UserVerified:   true,
+		BackupEligible: true,
+		BackupState:    false,
 	}
 	if err := credStore.CreateWebAuthnCredential(ctx, cred); err != nil {
 		t.Fatalf("CreateWebAuthnCredential: %v", err)
@@ -352,14 +357,32 @@ func TestWebAuthnCredentialStore_CreateFindUpdateDelete(t *testing.T) {
 	if found[0].Name != "会社支給MacBook" || found[0].CreatedAt.IsZero() || found[0].LastUsedAt != nil {
 		t.Fatalf("expected name/created_at set and last_used_at nil (never logged in yet), got %+v", found[0])
 	}
+	// go-webauthnのログイン検証(validateLogin)は保存済みBackupEligibleが
+	// 今回のアサーションと一致しないとログイン自体を拒否するため、
+	// これらのフラグが登録時から正確に保存・復元されることを確認する
+	// (#26で発見: この永続化が欠けていたため同期対応パスキーのログインが
+	// 常に失敗していた)。
+	if !found[0].UserPresent || !found[0].UserVerified || !found[0].BackupEligible || found[0].BackupState {
+		t.Fatalf("expected UserPresent/UserVerified/BackupEligible=true and BackupState=false to round-trip, got %+v", found[0])
+	}
 	credentialRowID := found[0].ID
 
-	if err := credStore.UpdateWebAuthnCredentialSignCount(ctx, credentialID, 42); err != nil {
+	// ログイン成功時、sign_countと合わせてbackup_stateも書き戻される
+	// (backup_stateは変化しうる値。backup_eligibleは変化しないため
+	// ここでは更新しない、UpdateWebAuthnCredentialSignCountのSQLコメント
+	// 参照)。
+	if err := credStore.UpdateWebAuthnCredentialSignCount(ctx, credentialID, 42, true); err != nil {
 		t.Fatalf("UpdateWebAuthnCredentialSignCount: %v", err)
 	}
 	updated, err := credStore.FindWebAuthnCredentialsByUserID(ctx, user.ID)
 	if err != nil || len(updated) != 1 || updated[0].SignCount != 42 {
 		t.Fatalf("expected sign_count=42 after update, got %+v (err=%v)", updated, err)
+	}
+	if !updated[0].BackupState {
+		t.Fatalf("expected backup_state to be updated to true, got %+v", updated[0])
+	}
+	if !updated[0].BackupEligible {
+		t.Fatalf("expected backup_eligible to remain unchanged (true), got %+v", updated[0])
 	}
 	if updated[0].LastUsedAt == nil {
 		t.Fatalf("expected last_used_at to be set after UpdateWebAuthnCredentialSignCount (a successful login), got %+v", updated[0])

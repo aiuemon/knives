@@ -25,14 +25,16 @@ import (
 // resolve to the user whose own credential was actually presented.
 
 type fakeWebAuthnCredentialStore struct {
-	byUser           map[uuid.UUID][]WebAuthnCredential
-	signCountUpdates map[string]uint32
+	byUser             map[uuid.UUID][]WebAuthnCredential
+	signCountUpdates   map[string]uint32
+	backupStateUpdates map[string]bool
 }
 
 func newFakeWebAuthnCredentialStore() *fakeWebAuthnCredentialStore {
 	return &fakeWebAuthnCredentialStore{
-		byUser:           map[uuid.UUID][]WebAuthnCredential{},
-		signCountUpdates: map[string]uint32{},
+		byUser:             map[uuid.UUID][]WebAuthnCredential{},
+		signCountUpdates:   map[string]uint32{},
+		backupStateUpdates: map[string]bool{},
 	}
 }
 
@@ -45,8 +47,9 @@ func (s *fakeWebAuthnCredentialStore) CreateWebAuthnCredential(_ context.Context
 	return nil
 }
 
-func (s *fakeWebAuthnCredentialStore) UpdateWebAuthnCredentialSignCount(_ context.Context, credentialID []byte, signCount uint32) error {
+func (s *fakeWebAuthnCredentialStore) UpdateWebAuthnCredentialSignCount(_ context.Context, credentialID []byte, signCount uint32, backupState bool) error {
 	s.signCountUpdates[string(credentialID)] = signCount
+	s.backupStateUpdates[string(credentialID)] = backupState
 	return nil
 }
 
@@ -267,5 +270,41 @@ func TestWebAuthnService_ApplyLoginResult_PersistsLatestSignCountOnSuccess(t *te
 	}
 	if got := credentials.signCountUpdates[string(credentialID)]; got != 7 {
 		t.Fatalf("expected sign_count to be persisted as 7, got %d", got)
+	}
+}
+
+// TestWebAuthnUser_WebAuthnCredentials_PreservesBackupEligibleFlag guards
+// against a real bug found via manual browser testing: passkey login always
+// failed with a generic 401, for every registered passkey. go-webauthn's
+// own validateLogin (webauthn/login.go) rejects a login outright if the
+// stored credential's Flags.BackupEligible doesn't match what the current
+// assertion reports — see go-webauthn's own storage documentation
+// (webauthn/doc.go, "Storage" section), which explicitly requires these
+// flags to be persisted and restored. This package was reconstructing
+// every credential's Flags as the zero value (always false), so any
+// backup-eligible (synced/cloud) passkey — which is the norm for iCloud
+// Keychain, Google Password Manager, etc. — would always mismatch and be
+// rejected, 100% reproducibly, regardless of which passkey was used.
+func TestWebAuthnUser_WebAuthnCredentials_PreservesBackupEligibleFlag(t *testing.T) {
+	u := &webauthnUser{
+		user: &User{ID: uuid.New(), Email: "user@example.com"},
+		credentials: []WebAuthnCredential{
+			{
+				CredentialID:   []byte("cred-1"),
+				UserPresent:    true,
+				UserVerified:   true,
+				BackupEligible: true,
+				BackupState:    true,
+			},
+		},
+	}
+
+	creds := u.WebAuthnCredentials()
+	if len(creds) != 1 {
+		t.Fatalf("expected exactly one credential, got %d", len(creds))
+	}
+	got := creds[0].Flags
+	if !got.UserPresent || !got.UserVerified || !got.BackupEligible || !got.BackupState {
+		t.Fatalf("expected all flags to round-trip from the domain credential, got %+v", got)
 	}
 }
