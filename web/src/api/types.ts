@@ -85,11 +85,16 @@ export interface PendingLink {
 }
 
 // WebAuthnCredential is one registered passkey (3.1節). id is the DB row
-// id (used to revoke it) — the raw credential_id/public_key are never
-// exposed to the client.
+// id (used to revoke/rename it) — the raw credential_id/public_key are
+// never exposed to the client. last_used_at is absent until the passkey
+// has actually been used to log in at least once (registering it doesn't
+// count).
 export interface WebAuthnCredential {
 	id: string;
+	name: string;
 	transports?: string[];
+	created_at: string;
+	last_used_at?: string;
 }
 
 export interface AuthSettings {

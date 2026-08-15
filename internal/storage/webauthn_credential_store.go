@@ -2,8 +2,10 @@ package storage
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/aiuemon/knives/internal/auth"
 )
@@ -27,14 +29,7 @@ func (s *WebAuthnCredentialStore) FindWebAuthnCredentialsByUserID(ctx context.Co
 	}
 	result := make([]auth.WebAuthnCredential, 0, len(rows))
 	for _, row := range rows {
-		result = append(result, auth.WebAuthnCredential{
-			ID:           row.ID,
-			UserID:       row.UserID,
-			CredentialID: row.CredentialID,
-			PublicKey:    row.PublicKey,
-			SignCount:    uint32(row.SignCount),
-			Transports:   row.Transports,
-		})
+		result = append(result, toDomainWebAuthnCredential(row))
 	}
 	return result, nil
 }
@@ -46,6 +41,7 @@ func (s *WebAuthnCredentialStore) CreateWebAuthnCredential(ctx context.Context, 
 		PublicKey:    cred.PublicKey,
 		SignCount:    int64(cred.SignCount),
 		Transports:   cred.Transports,
+		Name:         textOrNull(cred.Name),
 	})
 	if isUniqueViolation(err) {
 		return auth.ErrWebAuthnCredentialAlreadyRegistered
@@ -60,6 +56,22 @@ func (s *WebAuthnCredentialStore) UpdateWebAuthnCredentialSignCount(ctx context.
 	})
 }
 
+func (s *WebAuthnCredentialStore) UpdateWebAuthnCredentialName(ctx context.Context, id, userID uuid.UUID, name string) (*auth.WebAuthnCredential, error) {
+	row, err := s.Q.UpdateWebAuthnCredentialName(ctx, UpdateWebAuthnCredentialNameParams{
+		ID:     id,
+		UserID: userID,
+		Name:   textOrNull(name),
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, auth.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	cred := toDomainWebAuthnCredential(row)
+	return &cred, nil
+}
+
 func (s *WebAuthnCredentialStore) DeleteWebAuthnCredential(ctx context.Context, id, userID uuid.UUID) error {
 	rows, err := s.Q.DeleteWebAuthnCredential(ctx, DeleteWebAuthnCredentialParams{ID: id, UserID: userID})
 	if err != nil {
@@ -69,4 +81,22 @@ func (s *WebAuthnCredentialStore) DeleteWebAuthnCredential(ctx context.Context, 
 		return auth.ErrNotFound
 	}
 	return nil
+}
+
+func toDomainWebAuthnCredential(row *WebauthnCredential) auth.WebAuthnCredential {
+	cred := auth.WebAuthnCredential{
+		ID:           row.ID,
+		UserID:       row.UserID,
+		CredentialID: row.CredentialID,
+		PublicKey:    row.PublicKey,
+		SignCount:    uint32(row.SignCount),
+		Transports:   row.Transports,
+		Name:         row.Name.String,
+		CreatedAt:    row.CreatedAt.Time,
+	}
+	if row.LastUsedAt.Valid {
+		t := row.LastUsedAt.Time
+		cred.LastUsedAt = &t
+	}
+	return cred
 }

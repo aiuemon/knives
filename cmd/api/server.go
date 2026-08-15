@@ -42,7 +42,7 @@ type oidcLoginService interface {
 // real FIDO2 authenticator ceremony through go-webauthn.
 type webauthnAuthenticator interface {
 	BeginRegistration(ctx context.Context, userID uuid.UUID) (*protocol.CredentialCreation, string, error)
-	FinishRegistration(ctx context.Context, userID uuid.UUID, ceremonyID string, r *http.Request) error
+	FinishRegistration(ctx context.Context, userID uuid.UUID, ceremonyID, name string, r *http.Request) error
 	BeginLogin(ctx context.Context) (*protocol.CredentialAssertion, string, error)
 	FinishLogin(ctx context.Context, ceremonyID string, r *http.Request) (*auth.User, error)
 }
@@ -146,6 +146,7 @@ func (s *server) routes() http.Handler {
 			r.Post("/auth/webauthn/register/begin", s.handleWebAuthnRegisterBegin)
 			r.Post("/auth/webauthn/register/finish", s.handleWebAuthnRegisterFinish)
 			r.Get("/auth/webauthn/credentials", s.handleListWebAuthnCredentials)
+			r.Patch("/auth/webauthn/credentials/{id}", s.handleUpdateWebAuthnCredentialName)
 			r.Delete("/auth/webauthn/credentials/{id}", s.handleDeleteWebAuthnCredential)
 
 			r.Get("/short-urls", s.handleListShortURLs)
