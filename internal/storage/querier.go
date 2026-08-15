@@ -81,6 +81,9 @@ type Querier interface {
 	// parameterize a dynamic ORDER BY column, which this listing needs to let
 	// every displayed field be sortable.
 	UpdateShortURLFields(ctx context.Context, arg UpdateShortURLFieldsParams) (*ShortUrl, error)
+	UpdateWebAuthnCredentialName(ctx context.Context, arg UpdateWebAuthnCredentialNameParams) (*WebauthnCredential, error)
+	// ログイン成功のたびに呼ばれる(WebAuthnService.applyLoginResult)ため、
+	// sign_countと合わせてlast_used_atも更新する。
 	UpdateWebAuthnCredentialSignCount(ctx context.Context, arg UpdateWebAuthnCredentialSignCountParams) error
 	UpsertClickStatsDaily(ctx context.Context, arg UpsertClickStatsDailyParams) error
 	UpsertLocalCredentialPassword(ctx context.Context, arg UpsertLocalCredentialPasswordParams) error

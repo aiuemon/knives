@@ -50,6 +50,17 @@ func (s *fakeWebAuthnCredentialStore) UpdateWebAuthnCredentialSignCount(_ contex
 	return nil
 }
 
+func (s *fakeWebAuthnCredentialStore) UpdateWebAuthnCredentialName(_ context.Context, id, userID uuid.UUID, name string) (*WebAuthnCredential, error) {
+	creds := s.byUser[userID]
+	for i, c := range creds {
+		if c.ID == id {
+			creds[i].Name = name
+			return &creds[i], nil
+		}
+	}
+	return nil, ErrNotFound
+}
+
 func (s *fakeWebAuthnCredentialStore) DeleteWebAuthnCredential(_ context.Context, id, userID uuid.UUID) error {
 	creds := s.byUser[userID]
 	for i, c := range creds {
@@ -164,7 +175,7 @@ func TestWebAuthnService_FinishRegistration_RejectsUnknownCeremony(t *testing.T)
 	}
 
 	req := httptest.NewRequest("POST", "/auth/webauthn/register/finish", nil)
-	err := svc.FinishRegistration(context.Background(), uuid.New(), "never-issued", req)
+	err := svc.FinishRegistration(context.Background(), uuid.New(), "never-issued", "My Passkey", req)
 	if !errors.Is(err, ErrWebAuthnCeremonyExpired) {
 		t.Fatalf("expected ErrWebAuthnCeremonyExpired for an unknown ceremony id, got %v", err)
 	}

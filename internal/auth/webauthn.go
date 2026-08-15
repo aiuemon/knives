@@ -155,8 +155,10 @@ func (s *WebAuthnService) BeginRegistration(ctx context.Context, userID uuid.UUI
 }
 
 // FinishRegistration completes a registration ceremony begun for userID
-// and persists the new credential.
-func (s *WebAuthnService) FinishRegistration(ctx context.Context, userID uuid.UUID, ceremonyID string, r *http.Request) error {
+// and persists the new credential under name (already validated by the
+// caller via NormalizeWebAuthnCredentialName — empty is fine, meaning
+// unnamed).
+func (s *WebAuthnService) FinishRegistration(ctx context.Context, userID uuid.UUID, ceremonyID, name string, r *http.Request) error {
 	session, err := s.consumeSession(ctx, ceremonyID)
 	if err != nil {
 		return err
@@ -181,6 +183,7 @@ func (s *WebAuthnService) FinishRegistration(ctx context.Context, userID uuid.UU
 		PublicKey:    credential.PublicKey,
 		SignCount:    credential.Authenticator.SignCount,
 		Transports:   transports,
+		Name:         name,
 	})
 }
 

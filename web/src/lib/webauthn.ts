@@ -15,15 +15,18 @@ interface WebAuthnCeremonyResponse<T> {
 // begin/finishの間でceremony_idをクエリパラメータとして往復させ、
 // finishのリクエストボディはブラウザの応答をそのまま送る
 // (go-webauthnがRegistrationResponseJSONとしてパースできる形)。
-export async function registerPasskey(): Promise<void> {
+// nameも同様にクエリパラメータで送る(bodyを消費してしまうと
+// go-webauthn側のパースに使えなくなるため)。
+export async function registerPasskey(name: string): Promise<void> {
 	const begin = await api.post<
 		WebAuthnCeremonyResponse<PublicKeyCredentialCreationOptionsJSON>
 	>("/auth/webauthn/register/begin");
 	const attestation = await startRegistration({ optionsJSON: begin.options });
-	await api.post(
-		`/auth/webauthn/register/finish?ceremony_id=${encodeURIComponent(begin.ceremony_id)}`,
-		attestation,
-	);
+	const params = new URLSearchParams({
+		ceremony_id: begin.ceremony_id,
+		name,
+	});
+	await api.post(`/auth/webauthn/register/finish?${params}`, attestation);
 }
 
 // パスキーログイン(discoverable credential、メールアドレス入力不要)。

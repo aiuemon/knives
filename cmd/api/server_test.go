@@ -11,6 +11,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sort"
 	"strings"
 	"testing"
@@ -492,6 +493,17 @@ func (s *fakeWebAuthnCredentialStore) UpdateWebAuthnCredentialSignCount(_ contex
 	return nil
 }
 
+func (s *fakeWebAuthnCredentialStore) UpdateWebAuthnCredentialName(_ context.Context, id, userID uuid.UUID, name string) (*auth.WebAuthnCredential, error) {
+	creds := s.byUser[userID]
+	for i, c := range creds {
+		if c.ID == id {
+			creds[i].Name = name
+			return &creds[i], nil
+		}
+	}
+	return nil, auth.ErrNotFound
+}
+
 func (s *fakeWebAuthnCredentialStore) DeleteWebAuthnCredential(_ context.Context, id, userID uuid.UUID) error {
 	creds := s.byUser[userID]
 	for i, c := range creds {
@@ -850,7 +862,7 @@ func (f *fakeOIDCLoginService) HandleCallback(ctx context.Context, configID uuid
 // note). Unset funcs panic on call, same convention as the other fakes.
 type fakeWebAuthnAuthenticator struct {
 	beginRegistrationFunc  func(ctx context.Context, userID uuid.UUID) (*protocol.CredentialCreation, string, error)
-	finishRegistrationFunc func(ctx context.Context, userID uuid.UUID, ceremonyID string, r *http.Request) error
+	finishRegistrationFunc func(ctx context.Context, userID uuid.UUID, ceremonyID, name string, r *http.Request) error
 	beginLoginFunc         func(ctx context.Context) (*protocol.CredentialAssertion, string, error)
 	finishLoginFunc        func(ctx context.Context, ceremonyID string, r *http.Request) (*auth.User, error)
 }
@@ -859,8 +871,8 @@ func (f *fakeWebAuthnAuthenticator) BeginRegistration(ctx context.Context, userI
 	return f.beginRegistrationFunc(ctx, userID)
 }
 
-func (f *fakeWebAuthnAuthenticator) FinishRegistration(ctx context.Context, userID uuid.UUID, ceremonyID string, r *http.Request) error {
-	return f.finishRegistrationFunc(ctx, userID, ceremonyID, r)
+func (f *fakeWebAuthnAuthenticator) FinishRegistration(ctx context.Context, userID uuid.UUID, ceremonyID, name string, r *http.Request) error {
+	return f.finishRegistrationFunc(ctx, userID, ceremonyID, name, r)
 }
 
 func (f *fakeWebAuthnAuthenticator) BeginLogin(ctx context.Context) (*protocol.CredentialAssertion, string, error) {
@@ -1116,7 +1128,7 @@ func TestHandleWebAuthnRegisterFinish_SuccessReturnsADecodableBody(t *testing.T)
 	token, _ := d.sessions.Create(ctx, user.ID, time.Hour)
 
 	d.server.webauthn = &fakeWebAuthnAuthenticator{
-		finishRegistrationFunc: func(context.Context, uuid.UUID, string, *http.Request) error {
+		finishRegistrationFunc: func(context.Context, uuid.UUID, string, string, *http.Request) error {
 			return nil
 		},
 	}
@@ -1134,6 +1146,177 @@ func TestHandleWebAuthnRegisterFinish_SuccessReturnsADecodableBody(t *testing.T)
 	var body map[string]any
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("expected the body to be valid JSON, got decode error: %v", err)
+	}
+}
+
+func TestHandleWebAuthnRegisterFinish_PassesTheNameQueryParamThrough(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	user, _ := d.authStore.CreateUser(ctx, "user@example.com", true)
+	token, _ := d.sessions.Create(ctx, user.ID, time.Hour)
+
+	var gotName string
+	d.server.webauthn = &fakeWebAuthnAuthenticator{
+		finishRegistrationFunc: func(_ context.Context, _ uuid.UUID, _ string, name string, _ *http.Request) error {
+			gotName = name
+			return nil
+		},
+	}
+
+	req := withSessionCookie(httptest.NewRequest(http.MethodPost, "/api/auth/webauthn/register/finish?ceremony_id=some-ceremony&name="+url.QueryEscape("会社支給MacBook"), nil), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if gotName != "会社支給MacBook" {
+		t.Fatalf("expected the name query param to reach FinishRegistration, got %q", gotName)
+	}
+}
+
+func TestHandleWebAuthnRegisterFinish_OverlyLongNameReturns400(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	user, _ := d.authStore.CreateUser(ctx, "user@example.com", true)
+	token, _ := d.sessions.Create(ctx, user.ID, time.Hour)
+
+	tooLong := url.QueryEscape(strings.Repeat("a", 101))
+	req := withSessionCookie(httptest.NewRequest(http.MethodPost, "/api/auth/webauthn/register/finish?ceremony_id=some-ceremony&name="+tooLong, nil), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for a name over the length limit, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleListWebAuthnCredentials_IncludesNameAndTimestamps(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	user, _ := d.authStore.CreateUser(ctx, "user@example.com", true)
+	token, _ := d.sessions.Create(ctx, user.ID, time.Hour)
+
+	createdAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	lastUsedAt := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	d.webauthnCredentials.byUser[user.ID] = []auth.WebAuthnCredential{
+		{ID: uuid.New(), UserID: user.ID, Name: "会社支給MacBook", CreatedAt: createdAt, LastUsedAt: &lastUsedAt},
+	}
+
+	req := withSessionCookie(httptest.NewRequest(http.MethodGet, "/api/auth/webauthn/credentials", nil), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp []webauthnCredentialResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp) != 1 || resp[0].Name != "会社支給MacBook" || !resp[0].CreatedAt.Equal(createdAt) || resp[0].LastUsedAt == nil || !resp[0].LastUsedAt.Equal(lastUsedAt) {
+		t.Fatalf("expected name/created_at/last_used_at to be included, got %+v", resp)
+	}
+}
+
+func TestHandleListWebAuthnCredentials_NeverUsedHasNilLastUsedAt(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	user, _ := d.authStore.CreateUser(ctx, "user@example.com", true)
+	token, _ := d.sessions.Create(ctx, user.ID, time.Hour)
+
+	d.webauthnCredentials.byUser[user.ID] = []auth.WebAuthnCredential{
+		{ID: uuid.New(), UserID: user.ID, CreatedAt: time.Now()},
+	}
+
+	req := withSessionCookie(httptest.NewRequest(http.MethodGet, "/api/auth/webauthn/credentials", nil), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	var resp []webauthnCredentialResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp) != 1 || resp[0].LastUsedAt != nil {
+		t.Fatalf("expected a never-used credential to have a nil last_used_at, got %+v", resp)
+	}
+}
+
+func TestHandleUpdateWebAuthnCredentialName_RenamesTheCallersOwnCredential(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	user, _ := d.authStore.CreateUser(ctx, "user@example.com", true)
+	token, _ := d.sessions.Create(ctx, user.ID, time.Hour)
+
+	credID := uuid.New()
+	d.webauthnCredentials.byUser[user.ID] = []auth.WebAuthnCredential{{ID: credID, UserID: user.ID, Name: "old name"}}
+
+	body, _ := json.Marshal(updateWebAuthnCredentialNameRequest{Name: "new name"})
+	req := withSessionCookie(httptest.NewRequest(http.MethodPatch, "/api/auth/webauthn/credentials/"+credID.String(), bytes.NewReader(body)), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp webauthnCredentialResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Name != "new name" {
+		t.Fatalf("expected the response to reflect the new name, got %+v", resp)
+	}
+	if d.webauthnCredentials.byUser[user.ID][0].Name != "new name" {
+		t.Fatalf("expected the store to be updated, got %+v", d.webauthnCredentials.byUser[user.ID])
+	}
+}
+
+func TestHandleUpdateWebAuthnCredentialName_CannotRenameAnotherUsersCredential(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	owner, _ := d.authStore.CreateUser(ctx, "owner@example.com", true)
+	attacker, _ := d.authStore.CreateUser(ctx, "attacker@example.com", true)
+	token, _ := d.sessions.Create(ctx, attacker.ID, time.Hour)
+
+	credID := uuid.New()
+	d.webauthnCredentials.byUser[owner.ID] = []auth.WebAuthnCredential{{ID: credID, UserID: owner.ID, Name: "old name"}}
+
+	body, _ := json.Marshal(updateWebAuthnCredentialNameRequest{Name: "new name"})
+	req := withSessionCookie(httptest.NewRequest(http.MethodPatch, "/api/auth/webauthn/credentials/"+credID.String(), bytes.NewReader(body)), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 when renaming another user's credential, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if d.webauthnCredentials.byUser[owner.ID][0].Name != "old name" {
+		t.Fatalf("expected the owner's credential name to remain untouched")
+	}
+}
+
+func TestHandleUpdateWebAuthnCredentialName_OverlyLongNameReturns400(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	user, _ := d.authStore.CreateUser(ctx, "user@example.com", true)
+	token, _ := d.sessions.Create(ctx, user.ID, time.Hour)
+
+	credID := uuid.New()
+	d.webauthnCredentials.byUser[user.ID] = []auth.WebAuthnCredential{{ID: credID, UserID: user.ID}}
+
+	body, _ := json.Marshal(updateWebAuthnCredentialNameRequest{Name: strings.Repeat("a", 101)})
+	req := withSessionCookie(httptest.NewRequest(http.MethodPatch, "/api/auth/webauthn/credentials/"+credID.String(), bytes.NewReader(body)), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for a name over the length limit, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

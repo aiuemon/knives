@@ -34,6 +34,7 @@ func setupPostgres(t *testing.T) *pgxpool.Pool {
 			filepath.Join("..", "..", "db", "migrations", "0002_local_signup_verifications.up.sql"),
 			filepath.Join("..", "..", "db", "migrations", "0003_auth_settings_reauth_confirmation.up.sql"),
 			filepath.Join("..", "..", "db", "migrations", "0004_click_events_stream_id.up.sql"),
+			filepath.Join("..", "..", "db", "migrations", "0005_webauthn_credential_metadata.up.sql"),
 		),
 		postgres.WithDatabase("knives_test"),
 		postgres.WithUsername("knives"),
@@ -328,6 +329,7 @@ func TestWebAuthnCredentialStore_CreateFindUpdateDelete(t *testing.T) {
 		PublicKey:    []byte("test-public-key"),
 		SignCount:    0,
 		Transports:   []string{"internal", "hybrid"},
+		Name:         "会社支給MacBook",
 	}
 	if err := credStore.CreateWebAuthnCredential(ctx, cred); err != nil {
 		t.Fatalf("CreateWebAuthnCredential: %v", err)
@@ -347,6 +349,9 @@ func TestWebAuthnCredentialStore_CreateFindUpdateDelete(t *testing.T) {
 	if len(found) != 1 || found[0].SignCount != 0 || len(found[0].Transports) != 2 {
 		t.Fatalf("expected exactly the one credential just created, got %+v", found)
 	}
+	if found[0].Name != "会社支給MacBook" || found[0].CreatedAt.IsZero() || found[0].LastUsedAt != nil {
+		t.Fatalf("expected name/created_at set and last_used_at nil (never logged in yet), got %+v", found[0])
+	}
 	credentialRowID := found[0].ID
 
 	if err := credStore.UpdateWebAuthnCredentialSignCount(ctx, credentialID, 42); err != nil {
@@ -356,12 +361,26 @@ func TestWebAuthnCredentialStore_CreateFindUpdateDelete(t *testing.T) {
 	if err != nil || len(updated) != 1 || updated[0].SignCount != 42 {
 		t.Fatalf("expected sign_count=42 after update, got %+v (err=%v)", updated, err)
 	}
+	if updated[0].LastUsedAt == nil {
+		t.Fatalf("expected last_used_at to be set after UpdateWebAuthnCredentialSignCount (a successful login), got %+v", updated[0])
+	}
 
-	// 他ユーザのIDを渡した削除はErrNotFound(4.2節と同種の、所有者スコープの
-	// 徹底: 他人のcredential idを推測してもDELETEできない)。
+	renamed, err := credStore.UpdateWebAuthnCredentialName(ctx, credentialRowID, user.ID, "私物MacBook")
+	if err != nil {
+		t.Fatalf("UpdateWebAuthnCredentialName: %v", err)
+	}
+	if renamed.Name != "私物MacBook" {
+		t.Fatalf("expected the renamed credential to reflect the new name, got %+v", renamed)
+	}
+
+	// 他ユーザのIDを渡した変更・削除はErrNotFound(4.2節と同種の、所有者
+	// スコープの徹底: 他人のcredential idを推測しても操作できない)。
 	stranger, err := authStore.CreateUser(ctx, "stranger@example.com", true)
 	if err != nil {
 		t.Fatalf("CreateUser (stranger): %v", err)
+	}
+	if _, err := credStore.UpdateWebAuthnCredentialName(ctx, credentialRowID, stranger.ID, "乗っ取り"); !errors.Is(err, auth.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound when renaming with the wrong owner, got %v", err)
 	}
 	if err := credStore.DeleteWebAuthnCredential(ctx, credentialRowID, stranger.ID); !errors.Is(err, auth.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound when deleting with the wrong owner, got %v", err)
