@@ -131,25 +131,25 @@ describe("ShortURLStatsPage", () => {
 		const chart = screen.getByRole("img", {
 			name: "日別クリック数の折れ線グラフ",
 		});
-		expect(chart.querySelectorAll("circle")).toHaveLength(
+		expect(chart.querySelectorAll(".rounded-full")).toHaveLength(
 			statsWithData.daily.length,
 		);
 	});
 
 	it("renders a single visible point when the range has only one day of clicks", async () => {
 		// 元の不具合(#31)の再現条件: 期間内の日別データが1件のみでも、
-		// クリック数が0にならず見える形で描画されること。
+		// クリック数が0にならず見える形で描画されること。点はSVGの
+		// viewBox外(通常のHTML絶対配置)に置いているため、非対称な
+		// スケーリングで楕円になることもない(#33のフォローアップ)。
 		renderPage(singleDayStats);
 		await screen.findByText(/abc123/);
 
 		const chart = screen.getByRole("img", {
 			name: "日別クリック数の折れ線グラフ",
 		});
-		const circles = chart.querySelectorAll("circle");
-		expect(circles).toHaveLength(1);
-		expect(circles[0]?.querySelector("title")?.textContent).toBe(
-			"2026-08-08: 3件",
-		);
+		const points = chart.querySelectorAll(".rounded-full");
+		expect(points).toHaveLength(1);
+		expect(points[0]).toHaveAttribute("title", "2026-08-08: 3件");
 	});
 
 	it("refetches stats when the date range changes", async () => {
