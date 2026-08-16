@@ -105,7 +105,7 @@ export function ShortURLStatsPage() {
 							<div
 								role="img"
 								aria-label="日別クリック数の棒グラフ"
-								className="mb-8 flex h-40 items-end gap-1 border-b border-gray-200 dark:border-gray-700"
+								className="mb-8 flex h-40 gap-1 border-b border-gray-200 dark:border-gray-700"
 							>
 								{daily.map((d) => (
 									<div

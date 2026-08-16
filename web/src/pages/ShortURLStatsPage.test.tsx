@@ -117,6 +117,20 @@ describe("ShortURLStatsPage", () => {
 		).toHaveLength(2);
 	});
 
+	it("renders the daily chart bars so their height can scale with click count", async () => {
+		// 棒グラフの高さはbar div自身のstyle.heightに%指定されているが、
+		// これは祖先(このrole="img"コンテナ)がalign-items:stretchで
+		// flexアイテムの高さをh-40いっぱいに広げていて初めて意味を持つ。
+		// 祖先にitems-endが付くとアイテムがcontent-sizeになり、%指定の
+		// 高さがauto(実質0)に潰れてグラフが常にminHeightの2pxしか
+		// 表示されなくなる(クリック数があるのにグラフが空に見える不具合)。
+		renderPage(statsWithData);
+		await screen.findByText(/abc123/);
+
+		const chart = screen.getByRole("img", { name: "日別クリック数の棒グラフ" });
+		expect(chart.className.split(/\s+/)).not.toContain("items-end");
+	});
+
 	it("refetches stats when the date range changes", async () => {
 		const fetchMock = renderPage(statsWithData);
 		await screen.findByText(/abc123/);
