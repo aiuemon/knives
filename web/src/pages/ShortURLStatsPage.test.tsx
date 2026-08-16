@@ -45,6 +45,13 @@ const emptyStats: ShortURLStats = {
 	by_referrer: [],
 };
 
+const singleDayStats: ShortURLStats = {
+	from: "2026-07-19",
+	to: "2026-08-17",
+	daily: [{ date: "2026-08-08", click_count: 3 }],
+	by_referrer: [{ referrer_host: "", click_count: 3 }],
+};
+
 function jsonResponse(body: unknown, status = 200) {
 	return new Response(JSON.stringify(body), {
 		status,
@@ -117,18 +124,32 @@ describe("ShortURLStatsPage", () => {
 		).toHaveLength(2);
 	});
 
-	it("renders the daily chart bars so their height can scale with click count", async () => {
-		// 棒グラフの高さはbar div自身のstyle.heightに%指定されているが、
-		// これは祖先(このrole="img"コンテナ)がalign-items:stretchで
-		// flexアイテムの高さをh-40いっぱいに広げていて初めて意味を持つ。
-		// 祖先にitems-endが付くとアイテムがcontent-sizeになり、%指定の
-		// 高さがauto(実質0)に潰れてグラフが常にminHeightの2pxしか
-		// 表示されなくなる(クリック数があるのにグラフが空に見える不具合)。
+	it("renders one point per day on the line chart", async () => {
 		renderPage(statsWithData);
 		await screen.findByText(/abc123/);
 
-		const chart = screen.getByRole("img", { name: "日別クリック数の棒グラフ" });
-		expect(chart.className.split(/\s+/)).not.toContain("items-end");
+		const chart = screen.getByRole("img", {
+			name: "日別クリック数の折れ線グラフ",
+		});
+		expect(chart.querySelectorAll("circle")).toHaveLength(
+			statsWithData.daily.length,
+		);
+	});
+
+	it("renders a single visible point when the range has only one day of clicks", async () => {
+		// 元の不具合(#31)の再現条件: 期間内の日別データが1件のみでも、
+		// クリック数が0にならず見える形で描画されること。
+		renderPage(singleDayStats);
+		await screen.findByText(/abc123/);
+
+		const chart = screen.getByRole("img", {
+			name: "日別クリック数の折れ線グラフ",
+		});
+		const circles = chart.querySelectorAll("circle");
+		expect(circles).toHaveLength(1);
+		expect(circles[0]?.querySelector("title")?.textContent).toBe(
+			"2026-08-08: 3件",
+		);
 	});
 
 	it("refetches stats when the date range changes", async () => {
