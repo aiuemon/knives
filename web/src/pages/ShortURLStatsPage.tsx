@@ -111,13 +111,13 @@ export function ShortURLStatsPage() {
 							<div
 								role="img"
 								aria-label="日別クリック数の折れ線グラフ"
-								className="mb-8 h-40 border-b border-gray-200 dark:border-gray-700"
+								className="relative mb-8 h-40 border-b border-gray-200 dark:border-gray-700"
 							>
 								<svg
 									viewBox="0 0 100 100"
 									preserveAspectRatio="none"
 									aria-hidden="true"
-									className="h-full w-full overflow-visible"
+									className="absolute inset-0 h-full w-full overflow-visible"
 								>
 									<polyline
 										points={daily
@@ -129,19 +129,22 @@ export function ShortURLStatsPage() {
 										vectorEffect="non-scaling-stroke"
 										className="text-indigo-500"
 									/>
-									{daily.map((d, i) => (
-										<circle
-											key={d.date}
-											cx={xFor(i)}
-											cy={yFor(d.click_count)}
-											r="3"
-											vectorEffect="non-scaling-stroke"
-											className="fill-indigo-500"
-										>
-											<title>{`${d.date}: ${d.click_count}件`}</title>
-										</circle>
-									))}
 								</svg>
+								{daily.map((d, i) => (
+									// 点だけは非対称にスケールされるSVG座標系の外
+									// (通常のHTML絶対配置)に置く。circleをviewBox
+									// 内に置くと縦横で別々に引き伸ばされ、真円では
+									// なく楕円になってしまうため。
+									<div
+										key={d.date}
+										title={`${d.date}: ${d.click_count}件`}
+										className="absolute h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-indigo-500"
+										style={{
+											left: `${xFor(i)}%`,
+											top: `${yFor(d.click_count)}%`,
+										}}
+									/>
+								))}
 							</div>
 						)}
 
