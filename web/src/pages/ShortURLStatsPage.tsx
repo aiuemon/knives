@@ -37,6 +37,12 @@ export function ShortURLStatsPage() {
 	const byReferrer = statsQuery.data?.by_referrer ?? [];
 	const totalClicks = daily.reduce((sum, d) => sum + d.click_count, 0);
 	const maxDailyCount = Math.max(1, ...daily.map((d) => d.click_count));
+	// viewBoxは0〜100の固定座標系。preserveAspectRatio="none"でSVG自体を
+	// 親要素(h-40)いっぱいに引き伸ばすので、CSSのパーセント高さのように
+	// 親の実高さに依存しない。
+	const xFor = (i: number) =>
+		daily.length > 1 ? (i / (daily.length - 1)) * 100 : 50;
+	const yFor = (count: number) => 100 - (count / maxDailyCount) * 100;
 
 	return (
 		<div>
@@ -104,24 +110,38 @@ export function ShortURLStatsPage() {
 						) : (
 							<div
 								role="img"
-								aria-label="日別クリック数の棒グラフ"
-								className="mb-8 flex h-40 gap-1 border-b border-gray-200 dark:border-gray-700"
+								aria-label="日別クリック数の折れ線グラフ"
+								className="mb-8 h-40 border-b border-gray-200 dark:border-gray-700"
 							>
-								{daily.map((d) => (
-									<div
-										key={d.date}
-										title={`${d.date}: ${d.click_count}件`}
-										className="flex flex-1 flex-col items-center justify-end"
-									>
-										<div
-											className="w-full rounded-t bg-indigo-500"
-											style={{
-												height: `${(d.click_count / maxDailyCount) * 100}%`,
-												minHeight: d.click_count > 0 ? "2px" : "0",
-											}}
-										/>
-									</div>
-								))}
+								<svg
+									viewBox="0 0 100 100"
+									preserveAspectRatio="none"
+									aria-hidden="true"
+									className="h-full w-full overflow-visible"
+								>
+									<polyline
+										points={daily
+											.map((d, i) => `${xFor(i)},${yFor(d.click_count)}`)
+											.join(" ")}
+										fill="none"
+										stroke="currentColor"
+										strokeWidth="2"
+										vectorEffect="non-scaling-stroke"
+										className="text-indigo-500"
+									/>
+									{daily.map((d, i) => (
+										<circle
+											key={d.date}
+											cx={xFor(i)}
+											cy={yFor(d.click_count)}
+											r="3"
+											vectorEffect="non-scaling-stroke"
+											className="fill-indigo-500"
+										>
+											<title>{`${d.date}: ${d.click_count}件`}</title>
+										</circle>
+									))}
+								</svg>
 							</div>
 						)}
 
