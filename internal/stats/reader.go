@@ -19,11 +19,30 @@ var (
 	// ErrInvalidRange is returned by GetStats when to is before from, or
 	// the range exceeds maxRangeDays.
 	ErrInvalidRange = errors.New("stats: invalid from/to range")
+	// ErrInvalidGranularity is returned by GetStats when granularity is
+	// neither GranularityDay nor GranularityHour.
+	ErrInvalidGranularity = errors.New("stats: invalid granularity")
+)
+
+// Granularity selects how GetStats buckets click activity over time.
+type Granularity string
+
+const (
+	GranularityDay  Granularity = "day"
+	GranularityHour Granularity = "hour"
 )
 
 // DailyCount is one row of click_stats_daily (2.2節) for a short URL.
 type DailyCount struct {
 	Date       time.Time
+	ClickCount int64
+}
+
+// HourlyCount is one hour-truncated bucket of click_events for a short
+// URL, aggregated live since there is no hourly rollup table (2.2節の
+// click_stats_dailyは日単位のみ).
+type HourlyCount struct {
+	Hour       time.Time
 	ClickCount int64
 }
 
@@ -37,12 +56,16 @@ type ReferrerCount struct {
 }
 
 // Summary is what GetStats returns: a short URL's click activity over one
-// [From, To] range, broken down by day and by referrer.
+// [From, To] range, broken down by referrer and by either day or hour
+// depending on Granularity. Only the field matching Granularity is
+// populated (Daily for GranularityDay, Hourly for GranularityHour).
 type Summary struct {
-	From       time.Time
-	To         time.Time
-	Daily      []DailyCount
-	ByReferrer []ReferrerCount
+	From        time.Time
+	To          time.Time
+	Granularity Granularity
+	Daily       []DailyCount
+	Hourly      []HourlyCount
+	ByReferrer  []ReferrerCount
 }
 
 // Reader is the persistence port GetStats depends on. Permission-gating
@@ -54,6 +77,10 @@ type Reader interface {
 	// DailyCounts returns click_stats_daily rows for shortURLID with date
 	// in the half-open range [from, to), ordered by date ascending.
 	DailyCounts(ctx context.Context, shortURLID uuid.UUID, from, to time.Time) ([]DailyCount, error)
+	// HourlyCounts returns click_events aggregated into hour buckets for
+	// shortURLID with clicked_at in the half-open range [from, to),
+	// ordered by hour ascending.
+	HourlyCounts(ctx context.Context, shortURLID uuid.UUID, from, to time.Time) ([]HourlyCount, error)
 	// ReferrerCounts returns click_events aggregated by referrer_host for
 	// shortURLID with clicked_at in the half-open range [from, to),
 	// ordered by click count descending.
@@ -64,21 +91,36 @@ type Service struct {
 	Reader Reader
 }
 
-// GetStats validates the requested range and returns shortURLID's daily
-// and per-referrer click activity within it.
-func (s *Service) GetStats(ctx context.Context, shortURLID uuid.UUID, from, to time.Time) (*Summary, error) {
+// GetStats validates the requested range and returns shortURLID's
+// per-referrer click activity within it, bucketed by day or by hour
+// according to granularity.
+func (s *Service) GetStats(ctx context.Context, shortURLID uuid.UUID, from, to time.Time, granularity Granularity) (*Summary, error) {
 	if to.Before(from) || to.Sub(from) > maxRangeDays*24*time.Hour {
 		return nil, ErrInvalidRange
 	}
 
-	daily, err := s.Reader.DailyCounts(ctx, shortURLID, from, to)
-	if err != nil {
-		return nil, err
-	}
 	referrers, err := s.Reader.ReferrerCounts(ctx, shortURLID, from, to)
 	if err != nil {
 		return nil, err
 	}
 
-	return &Summary{From: from, To: to, Daily: daily, ByReferrer: referrers}, nil
+	summary := &Summary{From: from, To: to, Granularity: granularity, ByReferrer: referrers}
+	switch granularity {
+	case GranularityDay:
+		daily, err := s.Reader.DailyCounts(ctx, shortURLID, from, to)
+		if err != nil {
+			return nil, err
+		}
+		summary.Daily = daily
+	case GranularityHour:
+		hourly, err := s.Reader.HourlyCounts(ctx, shortURLID, from, to)
+		if err != nil {
+			return nil, err
+		}
+		summary.Hourly = hourly
+	default:
+		return nil, ErrInvalidGranularity
+	}
+
+	return summary, nil
 }

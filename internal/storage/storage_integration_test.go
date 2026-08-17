@@ -617,6 +617,17 @@ func TestStatsStore_DailyAndReferrerCounts(t *testing.T) {
 		t.Fatalf("expected [3,5] ordered by date, got %+v", daily)
 	}
 
+	hourly, err := statsStore.HourlyCounts(ctx, su.ID, day1, day2.Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("HourlyCounts: %v", err)
+	}
+	if len(hourly) != 3 {
+		t.Fatalf("expected 3 hour buckets (day1+1h, day1+2h, day2+1h), got %+v", hourly)
+	}
+	if !hourly[0].Hour.Equal(day1.Add(1*time.Hour)) || hourly[0].ClickCount != 1 {
+		t.Fatalf("expected first hour bucket to be day1+1h with count 1, got %+v", hourly[0])
+	}
+
 	referrers, err := statsStore.ReferrerCounts(ctx, su.ID, from, to.Add(24*time.Hour))
 	if err != nil {
 		t.Fatalf("ReferrerCounts: %v", err)

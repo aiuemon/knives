@@ -18,36 +18,64 @@ type statsDailyResponse struct {
 	ClickCount int64  `json:"click_count"`
 }
 
+type statsHourlyResponse struct {
+	Hour       string `json:"hour"`
+	ClickCount int64  `json:"click_count"`
+}
+
 type statsReferrerResponse struct {
 	ReferrerHost string `json:"referrer_host"`
 	ClickCount   int64  `json:"click_count"`
 }
 
 type shortURLStatsResponse struct {
-	From       string                  `json:"from"`
-	To         string                  `json:"to"`
-	Daily      []statsDailyResponse    `json:"daily"`
-	ByReferrer []statsReferrerResponse `json:"by_referrer"`
+	From        string                  `json:"from"`
+	To          string                  `json:"to"`
+	Granularity string                  `json:"granularity"`
+	Daily       []statsDailyResponse    `json:"daily,omitempty"`
+	Hourly      []statsHourlyResponse   `json:"hourly,omitempty"`
+	ByReferrer  []statsReferrerResponse `json:"by_referrer"`
 }
 
 // toShortURLStatsResponse formats summary for the client. from/to are the
 // caller-facing, inclusive calendar-day bounds the user actually asked
 // for — distinct from summary.From/To, which is the half-open range
 // actually queried (§Service.GetStats) and not meaningful to echo back.
+// Only one of Daily/Hourly is populated, matching summary.Granularity.
 func toShortURLStatsResponse(summary *stats.Summary, from, to time.Time) shortURLStatsResponse {
-	daily := make([]statsDailyResponse, 0, len(summary.Daily))
+	var daily []statsDailyResponse
 	for _, d := range summary.Daily {
 		daily = append(daily, statsDailyResponse{Date: d.Date.Format(statsDateLayout), ClickCount: d.ClickCount})
+	}
+	var hourly []statsHourlyResponse
+	for _, h := range summary.Hourly {
+		hourly = append(hourly, statsHourlyResponse{Hour: h.Hour.Format(time.RFC3339), ClickCount: h.ClickCount})
 	}
 	referrers := make([]statsReferrerResponse, 0, len(summary.ByReferrer))
 	for _, r := range summary.ByReferrer {
 		referrers = append(referrers, statsReferrerResponse{ReferrerHost: r.ReferrerHost, ClickCount: r.ClickCount})
 	}
 	return shortURLStatsResponse{
-		From:       from.Format(statsDateLayout),
-		To:         to.Format(statsDateLayout),
-		Daily:      daily,
-		ByReferrer: referrers,
+		From:        from.Format(statsDateLayout),
+		To:          to.Format(statsDateLayout),
+		Granularity: string(summary.Granularity),
+		Daily:       daily,
+		Hourly:      hourly,
+		ByReferrer:  referrers,
+	}
+}
+
+// parseStatsGranularity reads ?granularity= ("day" or "hour"), defaulting
+// to day when omitted.
+func parseStatsGranularity(q map[string][]string) (stats.Granularity, error) {
+	raw := firstOrEmpty(q["granularity"])
+	switch raw {
+	case "", string(stats.GranularityDay):
+		return stats.GranularityDay, nil
+	case string(stats.GranularityHour):
+		return stats.GranularityHour, nil
+	default:
+		return "", errors.New("invalid granularity (expected day or hour)")
 	}
 }
 
@@ -111,13 +139,18 @@ func (s *server) handleGetShortURLStats(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	granularity, err := parseStatsGranularity(r.URL.Query())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	// from/to are inclusive calendar-day bounds from the client's
 	// perspective ("through this day"), but Reader's range is half-open
 	// ([from, to)) — extend to by one day so that day's clicks are
 	// actually included.
 	toExclusive := to.AddDate(0, 0, 1)
 
-	summary, err := s.stats.GetStats(ctx, id, from, toExclusive)
+	summary, err := s.stats.GetStats(ctx, id, from, toExclusive, granularity)
 	if errors.Is(err, stats.ErrInvalidRange) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

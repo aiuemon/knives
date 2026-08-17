@@ -447,6 +447,7 @@ func (s *fakeShortURLStore) SetStatus(_ context.Context, id uuid.UUID, status sh
 
 type fakeStatsReader struct {
 	daily      map[uuid.UUID][]stats.DailyCount
+	hourly     map[uuid.UUID][]stats.HourlyCount
 	referrers  map[uuid.UUID][]stats.ReferrerCount
 	calledWith struct {
 		shortURLID uuid.UUID
@@ -457,6 +458,7 @@ type fakeStatsReader struct {
 func newFakeStatsReader() *fakeStatsReader {
 	return &fakeStatsReader{
 		daily:     map[uuid.UUID][]stats.DailyCount{},
+		hourly:    map[uuid.UUID][]stats.HourlyCount{},
 		referrers: map[uuid.UUID][]stats.ReferrerCount{},
 	}
 }
@@ -466,6 +468,13 @@ func (r *fakeStatsReader) DailyCounts(_ context.Context, shortURLID uuid.UUID, f
 	r.calledWith.from = from
 	r.calledWith.to = to
 	return r.daily[shortURLID], nil
+}
+
+func (r *fakeStatsReader) HourlyCounts(_ context.Context, shortURLID uuid.UUID, from, to time.Time) ([]stats.HourlyCount, error) {
+	r.calledWith.shortURLID = shortURLID
+	r.calledWith.from = from
+	r.calledWith.to = to
+	return r.hourly[shortURLID], nil
 }
 
 func (r *fakeStatsReader) ReferrerCounts(_ context.Context, shortURLID uuid.UUID, _, _ time.Time) ([]stats.ReferrerCount, error) {
@@ -1685,6 +1694,69 @@ func TestHandleGetShortURLStats_OwnerSeesDailyAndReferrerBreakdown(t *testing.T)
 	}
 	if len(d.authStore.audit) != 0 {
 		t.Fatalf("an owner viewing their own URL's stats must not write a stats.admin_view audit entry, got %+v", d.authStore.audit)
+	}
+}
+
+func TestHandleGetShortURLStats_GranularityHourReturnsHourlyBreakdown(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	owner, _ := d.authStore.CreateUser(ctx, "owner@example.com", true)
+	token, _ := d.sessions.Create(ctx, owner.ID, time.Hour)
+
+	created, err := d.server.shortURLs.Create(ctx, shorturl.CreateInput{DomainID: d.server.domainID, LongURL: "https://example.com", CreatedBy: owner.ID})
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+	d.permissions.grants[grantKey(created.ID, owner.ID)] = &permission.Grant{UserID: owner.ID, Role: permission.RoleOwner}
+	d.statsReader.hourly[created.ID] = []stats.HourlyCount{
+		{Hour: time.Date(2026, 8, 1, 14, 0, 0, 0, time.UTC), ClickCount: 2},
+	}
+	d.statsReader.referrers[created.ID] = []stats.ReferrerCount{
+		{ReferrerHost: "google.com", ClickCount: 2},
+	}
+
+	req := withSessionCookie(httptest.NewRequest(http.MethodGet, "/api/short-urls/"+created.ID.String()+"/stats?from=2026-08-01&to=2026-08-01&granularity=hour", nil), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp shortURLStatsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Granularity != "hour" {
+		t.Fatalf("expected granularity=hour to be echoed back, got %+v", resp)
+	}
+	if len(resp.Hourly) != 1 || resp.Hourly[0].ClickCount != 2 {
+		t.Fatalf("expected the hourly breakdown to pass through, got %+v", resp.Hourly)
+	}
+	if len(resp.Daily) != 0 {
+		t.Fatalf("expected daily to be empty when granularity=hour, got %+v", resp.Daily)
+	}
+}
+
+func TestHandleGetShortURLStats_InvalidGranularityReturns400(t *testing.T) {
+	d := newTestServer()
+	ctx := context.Background()
+
+	owner, _ := d.authStore.CreateUser(ctx, "owner@example.com", true)
+	token, _ := d.sessions.Create(ctx, owner.ID, time.Hour)
+
+	created, err := d.server.shortURLs.Create(ctx, shorturl.CreateInput{DomainID: d.server.domainID, LongURL: "https://example.com", CreatedBy: owner.ID})
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+	d.permissions.grants[grantKey(created.ID, owner.ID)] = &permission.Grant{UserID: owner.ID, Role: permission.RoleOwner}
+
+	req := withSessionCookie(httptest.NewRequest(http.MethodGet, "/api/short-urls/"+created.ID.String()+"/stats?granularity=minute", nil), token)
+	rec := httptest.NewRecorder()
+	d.server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for an invalid granularity, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

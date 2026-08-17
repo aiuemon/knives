@@ -51,17 +51,25 @@ export interface ShortURLDailyStat {
 	click_count: number;
 }
 
+export interface ShortURLHourlyStat {
+	hour: string; // RFC3339
+	click_count: number;
+}
+
 export interface ShortURLReferrerStat {
 	referrer_host: string;
 	click_count: number;
 }
 
 // ShortURLStats is GET /short-urls/{id}/stats (4節)。from/toはリクエストで
-// 指定した(または既定の)日付範囲そのまま(YYYY-MM-DD)。
+// 指定した(または既定の)日付範囲そのまま(YYYY-MM-DD)。granularityに応じて
+// dailyまたはhourlyの一方だけが入る。
 export interface ShortURLStats {
 	from: string;
 	to: string;
-	daily: ShortURLDailyStat[];
+	granularity: "day" | "hour";
+	daily?: ShortURLDailyStat[];
+	hourly?: ShortURLHourlyStat[];
 	by_referrer: ShortURLReferrerStat[];
 }
 

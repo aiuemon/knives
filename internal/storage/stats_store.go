@@ -39,6 +39,22 @@ func (s *StatsStore) DailyCounts(ctx context.Context, shortURLID uuid.UUID, from
 	return result, nil
 }
 
+func (s *StatsStore) HourlyCounts(ctx context.Context, shortURLID uuid.UUID, from, to time.Time) ([]stats.HourlyCount, error) {
+	rows, err := s.Q.FindHourlyClickCounts(ctx, FindHourlyClickCountsParams{
+		ShortUrlID:  shortURLID,
+		ClickedAt:   pgtype.Timestamptz{Time: from, Valid: true},
+		ClickedAt_2: pgtype.Timestamptz{Time: to, Valid: true},
+	})
+	if err != nil {
+		return nil, err
+	}
+	result := make([]stats.HourlyCount, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, stats.HourlyCount{Hour: row.Hour.Time, ClickCount: row.ClickCount})
+	}
+	return result, nil
+}
+
 func (s *StatsStore) ReferrerCounts(ctx context.Context, shortURLID uuid.UUID, from, to time.Time) ([]stats.ReferrerCount, error) {
 	rows, err := s.Q.FindReferrerClickCounts(ctx, FindReferrerClickCountsParams{
 		ShortUrlID:  shortURLID,

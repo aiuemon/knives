@@ -32,6 +32,10 @@ type Querier interface {
 	FindAuthSettings(ctx context.Context) (*FindAuthSettingsRow, error)
 	FindDailyClickCounts(ctx context.Context, arg FindDailyClickCountsParams) ([]*FindDailyClickCountsRow, error)
 	FindDefaultDomain(ctx context.Context) (uuid.UUID, error)
+	// click_stats_daily(UTC単位で丸めてロールアップ済み。stats.RecordBatch)と
+	// 揃えるため、date_truncはセッションのTimeZone(運用環境ではAsia/Tokyo)
+	// ではなく明示的にUTC境界で丸める。
+	FindHourlyClickCounts(ctx context.Context, arg FindHourlyClickCountsParams) ([]*FindHourlyClickCountsRow, error)
 	FindIsSystemAdmin(ctx context.Context, id uuid.UUID) (bool, error)
 	FindLocalCredential(ctx context.Context, userID uuid.UUID) (*LocalCredential, error)
 	FindLocalSignupVerificationByTokenHash(ctx context.Context, tokenHash string) (*FindLocalSignupVerificationByTokenHashRow, error)
