@@ -34,6 +34,7 @@ const ownedURL: ShortURL = {
 const statsWithData: ShortURLStats = {
 	from: "2026-08-01",
 	to: "2026-08-07",
+	granularity: "day",
 	daily: [
 		{ date: "2026-08-01", click_count: 2 },
 		{ date: "2026-08-02", click_count: 5 },
@@ -47,6 +48,7 @@ const statsWithData: ShortURLStats = {
 const emptyStats: ShortURLStats = {
 	from: "2026-08-01",
 	to: "2026-08-07",
+	granularity: "day",
 	daily: [],
 	by_referrer: [],
 };
@@ -54,7 +56,19 @@ const emptyStats: ShortURLStats = {
 const singleDayStats: ShortURLStats = {
 	from: "2026-07-19",
 	to: "2026-08-17",
+	granularity: "day",
 	daily: [{ date: "2026-08-08", click_count: 3 }],
+	by_referrer: [{ referrer_host: "", click_count: 3 }],
+};
+
+const hourlyStats: ShortURLStats = {
+	from: "2026-08-08",
+	to: "2026-08-08",
+	granularity: "hour",
+	hourly: [
+		{ hour: "2026-08-08T12:00:00.000Z", click_count: 2 },
+		{ hour: "2026-08-08T14:00:00.000Z", click_count: 1 },
+	],
 	by_referrer: [{ referrer_host: "", click_count: 3 }],
 };
 
@@ -253,6 +267,41 @@ describe("ShortURLStatsPage", () => {
 				),
 			).toBe(true),
 		);
+	});
+
+	it("switches to hourly granularity and zero-fills empty hours when the checkbox is checked", async () => {
+		const user = userEvent.setup();
+		const fetchMock = renderPage(statsWithData, (url) => {
+			if (url.includes("granularity=hour")) {
+				return jsonResponse(hourlyStats);
+			}
+			return undefined;
+		});
+		await screen.findByText(/abc123/);
+
+		await setCustomRange(user, hourlyStats.from, hourlyStats.to);
+		await user.click(screen.getByLabelText("1時間単位で表示"));
+
+		await waitFor(() =>
+			expect(
+				fetchMock.mock.calls.some(([url]) =>
+					String(url).includes("granularity=hour"),
+				),
+			).toBe(true),
+		);
+
+		const chart = await screen.findByRole("img", {
+			name: "時間別クリック数の折れ線グラフ",
+		});
+		await waitFor(() =>
+			expect(chart.querySelectorAll(".rounded-full")).toHaveLength(24),
+		);
+		const titles = Array.from(chart.querySelectorAll(".rounded-full")).map(
+			(el) => el.getAttribute("title"),
+		);
+		expect(titles).toContain("08-08 12:00: 2件");
+		expect(titles).toContain("08-08 14:00: 1件");
+		expect(titles).toContain("08-08 13:00: 0件"); // クリックの無い時間は0件埋め
 	});
 
 	it("refetches stats when the custom date range changes", async () => {

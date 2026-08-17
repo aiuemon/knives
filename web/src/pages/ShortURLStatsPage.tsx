@@ -12,6 +12,15 @@ const STATS_MAX_RANGE_DAYS = 366;
 type RangeMode = "1d" | "7d" | "30d" | "365d" | "all" | "custom";
 type PresetRangeMode = Exclude<RangeMode, "custom">;
 
+type ChartPoint = {
+	key: string;
+	// title: ホバー時のツールチップ用(省略しない完全な表記)。
+	// tick: 横軸ラベル用(スペースが限られるため簡略表記)。
+	title: string;
+	tick: string;
+	click_count: number;
+};
+
 function todayISO() {
 	return new Date().toISOString().slice(0, 10);
 }
@@ -33,6 +42,30 @@ function enumerateDates(fromISO: string, toISO: string): string[] {
 		cur.setUTCDate(cur.getUTCDate() + 1);
 	}
 	return dates;
+}
+
+// [fromISO, toISO]に含まれる時刻を1時間刻みで列挙する(fromの0時からtoの
+// 翌日0時の直前まで、UTC基準)。バックエンド(FindHourlyClickCounts)も
+// セッションのTimeZoneに依らずUTC境界で丸めているため、同じ基準で揃える。
+function enumerateHours(fromISO: string, toISO: string): string[] {
+	const hours: string[] = [];
+	const cur = new Date(`${fromISO}T00:00:00Z`);
+	const end = new Date(`${toISO}T00:00:00Z`);
+	end.setUTCDate(end.getUTCDate() + 1);
+	while (cur.getTime() < end.getTime()) {
+		hours.push(cur.toISOString());
+		cur.setUTCHours(cur.getUTCHours() + 1);
+	}
+	return hours;
+}
+
+// "2026-08-08T21:00:00.000Z" → "08-08 21:00"(UTC基準の表示に統一)
+function formatHourLabel(iso: string): string {
+	const d = new Date(iso);
+	const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+	const dd = String(d.getUTCDate()).padStart(2, "0");
+	const hh = String(d.getUTCHours()).padStart(2, "0");
+	return `${mm}-${dd} ${hh}:00`;
 }
 
 function computeFromDate(
@@ -62,6 +95,7 @@ export function ShortURLStatsPage() {
 	const [rangeMode, setRangeMode] = useState<RangeMode>("30d");
 	const [customFrom, setCustomFrom] = useState(daysAgoISO(29));
 	const [customTo, setCustomTo] = useState(todayISO());
+	const [hourlyView, setHourlyView] = useState(false);
 
 	const urlQuery = useQuery({
 		queryKey: ["short-urls", id],
@@ -77,34 +111,57 @@ export function ShortURLStatsPage() {
 			: computeFromDate(rangeMode, createdDate);
 
 	const statsQuery = useQuery({
-		queryKey: ["short-urls", id, "stats", { from, to }],
+		queryKey: ["short-urls", id, "stats", { from, to, hourlyView }],
 		queryFn: () =>
-			api.get<ShortURLStats>(`/short-urls/${id}/stats?from=${from}&to=${to}`),
+			api.get<ShortURLStats>(
+				`/short-urls/${id}/stats?from=${from}&to=${to}${
+					hourlyView ? "&granularity=hour" : ""
+				}`,
+			),
 		enabled: !!id,
 	});
 
-	const daily = statsQuery.data?.daily ?? [];
+	const dailyData = statsQuery.data?.daily ?? [];
+	const hourlyData = statsQuery.data?.hourly ?? [];
+	const activePoints = hourlyView ? hourlyData : dailyData;
 	const byReferrer = statsQuery.data?.by_referrer ?? [];
-	const totalClicks = daily.reduce((sum, d) => sum + d.click_count, 0);
-	const maxDailyCount = Math.max(1, ...daily.map((d) => d.click_count));
+	const totalClicks = activePoints.reduce((sum, p) => sum + p.click_count, 0);
+	const maxCount = Math.max(1, ...activePoints.map((p) => p.click_count));
 
-	// click_stats_dailyはクリックのあった日のみ行を持つため、daily配列は
-	// 範囲内の日付を飛び飛びにしか含まない。横軸を実際の日付間隔と
-	// 対応させるため、範囲内の全日付を0件埋めしたseriesを作る。
-	const series =
-		daily.length > 0
-			? enumerateDates(from, to).map((date) => ({
-					date,
-					click_count: daily.find((d) => d.date === date)?.click_count ?? 0,
-				}))
-			: [];
+	// click_stats_daily/click_eventsはクリックのあった日・時間のみ行を
+	// 持つため、activePointsは範囲内を飛び飛びにしか含まない。横軸を
+	// 実際の日付・時刻間隔と対応させるため、範囲内の全区間を0件埋めした
+	// seriesを作る。
+	const dailyByDate = new Map(dailyData.map((d) => [d.date, d.click_count]));
+	const hourlyByKey = new Map(
+		hourlyData.map((h) => [new Date(h.hour).toISOString(), h.click_count]),
+	);
+	const series: ChartPoint[] =
+		activePoints.length === 0
+			? []
+			: hourlyView
+				? enumerateHours(from, to).map((iso) => {
+						const label = formatHourLabel(iso);
+						return {
+							key: iso,
+							title: label,
+							tick: label,
+							click_count: hourlyByKey.get(iso) ?? 0,
+						};
+					})
+				: enumerateDates(from, to).map((date) => ({
+						key: date,
+						title: date,
+						tick: date.slice(5),
+						click_count: dailyByDate.get(date) ?? 0,
+					}));
 
 	// viewBoxは0〜100の固定座標系。preserveAspectRatio="none"でSVG自体を
 	// 親要素(h-40)いっぱいに引き伸ばすので、CSSのパーセント高さのように
 	// 親の実高さに依存しない。
 	const xFor = (i: number) =>
 		series.length > 1 ? (i / (series.length - 1)) * 100 : 50;
-	const yFor = (count: number) => 100 - (count / maxDailyCount) * 100;
+	const yFor = (count: number) => 100 - (count / maxCount) * 100;
 
 	const tickCount = Math.min(6, series.length);
 	const tickIndices = Array.from(
@@ -116,6 +173,11 @@ export function ShortURLStatsPage() {
 			),
 		),
 	);
+
+	const chartHeading = hourlyView ? "時間別クリック数" : "日別クリック数";
+	const chartAriaLabel = hourlyView
+		? "時間別クリック数の折れ線グラフ"
+		: "日別クリック数の折れ線グラフ";
 
 	return (
 		<div>
@@ -180,6 +242,14 @@ export function ShortURLStatsPage() {
 							</label>
 						</>
 					)}
+					<label className="flex items-center gap-2 pb-1.5 text-sm text-gray-600 dark:text-gray-300">
+						<input
+							type="checkbox"
+							checked={hourlyView}
+							onChange={(e) => setHourlyView(e.target.checked)}
+						/>
+						1時間単位で表示
+					</label>
 				</div>
 
 				{statsQuery.isLoading && <p>読み込み中…</p>}
@@ -197,8 +267,8 @@ export function ShortURLStatsPage() {
 							</span>
 						</p>
 
-						<h2 className="mb-3 text-lg font-medium">日別クリック数</h2>
-						{daily.length === 0 ? (
+						<h2 className="mb-3 text-lg font-medium">{chartHeading}</h2>
+						{activePoints.length === 0 ? (
 							<p className="mb-8 text-gray-500">
 								この期間のクリックはありません。
 							</p>
@@ -208,13 +278,13 @@ export function ShortURLStatsPage() {
 									aria-hidden="true"
 									className="flex h-40 flex-col justify-between text-right text-xs text-gray-400"
 								>
-									<span>{maxDailyCount}</span>
-									<span>{Math.round(maxDailyCount / 2)}</span>
+									<span>{maxCount}</span>
+									<span>{Math.round(maxCount / 2)}</span>
 									<span>0</span>
 								</div>
 								<div
 									role="img"
-									aria-label="日別クリック数の折れ線グラフ"
+									aria-label={chartAriaLabel}
 									className="relative h-40 border-b border-gray-200 dark:border-gray-700"
 								>
 									<svg
@@ -240,8 +310,8 @@ export function ShortURLStatsPage() {
 										// 内に置くと縦横で別々に引き伸ばされ、真円では
 										// なく楕円になってしまうため。
 										<div
-											key={d.date}
-											title={`${d.date}: ${d.click_count}件`}
+											key={d.key}
+											title={`${d.title}: ${d.click_count}件`}
 											className="absolute h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-indigo-500"
 											style={{
 												left: `${xFor(i)}%`,
@@ -257,11 +327,11 @@ export function ShortURLStatsPage() {
 								>
 									{tickIndices.map((i) => (
 										<span
-											key={series[i]?.date}
+											key={series[i]?.key}
 											className="absolute -translate-x-1/2"
 											style={{ left: `${xFor(i)}%` }}
 										>
-											{series[i]?.date.slice(5)}
+											{series[i]?.tick}
 										</span>
 									))}
 								</div>
