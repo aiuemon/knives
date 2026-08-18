@@ -18,8 +18,9 @@ func TestParseClickEvent_Success(t *testing.T) {
 			"short_url_id":  shortURLID.String(),
 			"clicked_at":    clickedAt.Format(time.RFC3339Nano),
 			"referrer_host": "example.com",
-			"user_agent":    "Mozilla/5.0",
+			"user_agent":    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 			"ip_hash":       "abc123",
+			"country_code":  "JP",
 		},
 	}
 
@@ -36,8 +37,12 @@ func TestParseClickEvent_Success(t *testing.T) {
 	if !ev.ClickedAt.Equal(clickedAt) {
 		t.Fatalf("expected ClickedAt %v, got %v", clickedAt, ev.ClickedAt)
 	}
-	if ev.ReferrerHost != "example.com" || ev.UserAgentRaw != "Mozilla/5.0" || ev.IPHash != "abc123" {
+	if ev.ReferrerHost != "example.com" || ev.IPHash != "abc123" || ev.CountryCode != "JP" {
 		t.Fatalf("unexpected event: %+v", ev)
+	}
+	// OS/BrowserはUserAgentRawから解析される(internal/useragent)。
+	if ev.OS != "Windows" || ev.Browser != "Chrome" {
+		t.Fatalf("expected OS=Windows, Browser=Chrome from the UA string, got OS=%q, Browser=%q", ev.OS, ev.Browser)
 	}
 }
 
@@ -55,7 +60,7 @@ func TestParseClickEvent_MissingOptionalFieldsDefaultToEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseClickEvent: %v", err)
 	}
-	if ev.ReferrerHost != "" || ev.UserAgentRaw != "" || ev.IPHash != "" {
+	if ev.ReferrerHost != "" || ev.UserAgentRaw != "" || ev.IPHash != "" || ev.CountryCode != "" || ev.OS != "" || ev.Browser != "" {
 		t.Fatalf("expected missing optional fields to default to empty strings, got %+v", ev)
 	}
 }

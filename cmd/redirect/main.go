@@ -17,6 +17,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/aiuemon/knives/internal/cache"
+	"github.com/aiuemon/knives/internal/geoip"
 	"github.com/aiuemon/knives/internal/storage"
 )
 
@@ -67,6 +68,11 @@ func main() {
 	limiter := newIPRateLimiter(20, 40) // 6節-0: プロセス内・IPごとのトークンバケット
 	go limiter.cleanupLoop(ctx, 5*time.Minute, 10*time.Minute)
 
+	geoResolver := newGeoResolver()
+	if closer, ok := geoResolver.(interface{ Close() error }); ok {
+		defer closer.Close()
+	}
+
 	srv := &server{
 		cache:       shortURLCache,
 		store:       store,
@@ -74,6 +80,7 @@ func main() {
 		domainID:    domainID,
 		ipHashSalt:  ipHashSalt,
 		limiter:     limiter,
+		geoResolver: geoResolver,
 	}
 
 	httpServer := &http.Server{
@@ -98,6 +105,23 @@ func main() {
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		slog.Error("redirect server shutdown failed", "error", err)
 	}
+}
+
+// newGeoResolver opens the .mmdb database at GEOIP_DB_PATH if set. A
+// missing/unset path or a failed open both fall back to NoopResolver
+// (country_code stays NULL) rather than preventing the server from
+// starting — GeoIP is an optional enrichment, not a hard dependency.
+func newGeoResolver() geoip.Resolver {
+	path := os.Getenv("GEOIP_DB_PATH")
+	if path == "" {
+		return geoip.NoopResolver{}
+	}
+	resolver, err := geoip.OpenMaxMindResolver(path)
+	if err != nil {
+		slog.Error("failed to open GeoIP database; country resolution disabled", "path", path, "error", err)
+		return geoip.NoopResolver{}
+	}
+	return resolver
 }
 
 func getenv(key, fallback string) string {

@@ -35,6 +35,9 @@ func (s *ClickEventStore) InsertClickEvent(ctx context.Context, ev stats.ClickEv
 		ReferrerHost: textOrNull(ev.ReferrerHost),
 		UserAgentRaw: textOrNull(ev.UserAgentRaw),
 		IpHash:       textOrNull(ev.IPHash),
+		CountryCode:  textOrNull(ev.CountryCode),
+		Os:           textOrNull(ev.OS),
+		Browser:      textOrNull(ev.Browser),
 		StreamID:     ev.StreamID,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {

@@ -256,7 +256,9 @@ erDiagram
 | referrer_host | text NULL | ホストのみ保持(プライバシー配慮) |
 | user_agent_raw | text | |
 | ip_hash | text | 生IPは保持しない(ソルト付きハッシュ) |
-| country_code | text NULL | 非同期GeoIP解決(未実装。GeoIPライブラリ未選定のため現状は常にNULL) |
+| country_code | text NULL | GeoIP解決(`internal/geoip`)。`cmd/redirect`がIPをハッシュ化する前に解決してStreamに載せる。`GEOIP_DB_PATH`未設定時や解決失敗時はNULLのまま |
+| os | text NULL | User-Agent解析(`internal/useragent`、`cmd/worker`が取り込み時に一度だけ解析)。約20カテゴリ(Windows/macOS/iOS/iPadOS/Android/Ubuntu/Debian/FreeBSD等)+不明時は「その他」 |
+| browser | text NULL | User-Agent解析によるブラウザファミリー(バージョン差異は同一視)。解析不能時はNULL |
 | stream_id | text | Redis Streamのエントリ ID。at-least-once配送(6節-5)の冪等キー。UNIQUE(clicked_at, stream_id) |
 
 保持期間は無期限とし、削除・アーカイブ用のバッチジョブは設けない。

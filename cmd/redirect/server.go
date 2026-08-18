@@ -17,6 +17,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/aiuemon/knives/internal/cache"
+	"github.com/aiuemon/knives/internal/geoip"
 	"github.com/aiuemon/knives/internal/storage"
 )
 
@@ -29,6 +30,7 @@ type server struct {
 	domainID    uuid.UUID
 	ipHashSalt  string
 	limiter     *ipRateLimiter
+	geoResolver geoip.Resolver
 }
 
 // cachedTarget is the JSON value stored in cache.Cache for one short_code:
@@ -96,13 +98,7 @@ func (s *server) handleRedirect(w http.ResponseWriter, r *http.Request) {
 // latency to the hot path (6節-4). Failures are logged, not surfaced: a
 // dropped click event must never turn into a broken redirect.
 func (s *server) recordClickAsync(shortURLID uuid.UUID, r *http.Request) {
-	values := map[string]any{
-		"short_url_id":  shortURLID.String(),
-		"clicked_at":    time.Now().UTC().Format(time.RFC3339Nano),
-		"referrer_host": refererHost(r.Referer()),
-		"user_agent":    r.UserAgent(),
-		"ip_hash":       hashIP(clientIP(r), s.ipHashSalt),
-	}
+	values := buildClickValues(shortURLID, r, s.ipHashSalt, s.geoResolver)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -110,6 +106,25 @@ func (s *server) recordClickAsync(shortURLID uuid.UUID, r *http.Request) {
 			slog.Error("click stream push failed", "error", err)
 		}
 	}()
+}
+
+// buildClickValues assembles the Redis Stream entry for one click. Kept
+// separate from recordClickAsync's goroutine dispatch so it's testable
+// without a real Redis connection.
+func buildClickValues(shortURLID uuid.UUID, r *http.Request, ipHashSalt string, geoResolver geoip.Resolver) map[string]any {
+	ip := clientIP(r)
+	// 国の解決はここでしか行えない: ip_hashは不可逆なため、ハッシュ化
+	// する前の生IPを使えるのはこのリクエスト処理中だけ(internal/geoip)。
+	countryCode, _ := geoResolver.Lookup(net.ParseIP(ip))
+
+	return map[string]any{
+		"short_url_id":  shortURLID.String(),
+		"clicked_at":    time.Now().UTC().Format(time.RFC3339Nano),
+		"referrer_host": refererHost(r.Referer()),
+		"user_agent":    r.UserAgent(),
+		"ip_hash":       hashIP(ip, ipHashSalt),
+		"country_code":  countryCode,
+	}
 }
 
 func clientIP(r *http.Request) string {

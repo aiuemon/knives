@@ -264,6 +264,8 @@ type ClickEvent struct {
 	IpHash       pgtype.Text        `json:"ip_hash"`
 	CountryCode  pgtype.Text        `json:"country_code"`
 	StreamID     string             `json:"stream_id"`
+	Os           pgtype.Text        `json:"os"`
+	Browser      pgtype.Text        `json:"browser"`
 }
 
 type ClickEventsDefault struct {
