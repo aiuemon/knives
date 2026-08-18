@@ -12,6 +12,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/aiuemon/knives/internal/stats"
+	"github.com/aiuemon/knives/internal/useragent"
 )
 
 const (
@@ -169,15 +170,22 @@ func parseClickEvent(msg redis.XMessage) (stats.ClickEvent, error) {
 	}
 
 	referrerHost, _ := msg.Values["referrer_host"].(string)
-	userAgent, _ := msg.Values["user_agent"].(string)
+	userAgentRaw, _ := msg.Values["user_agent"].(string)
 	ipHash, _ := msg.Values["ip_hash"].(string)
+	countryCode, _ := msg.Values["country_code"].(string)
+
+	// UAの解析はここ(cmd/redirectのホットパスの外)で一度だけ行う(4節)。
+	os, browser := useragent.Categorize(userAgentRaw)
 
 	return stats.ClickEvent{
 		StreamID:     msg.ID,
 		ShortURLID:   shortURLID,
 		ClickedAt:    clickedAt,
 		ReferrerHost: referrerHost,
-		UserAgentRaw: userAgent,
+		UserAgentRaw: userAgentRaw,
 		IPHash:       ipHash,
+		CountryCode:  countryCode,
+		OS:           os,
+		Browser:      browser,
 	}, nil
 }

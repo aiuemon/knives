@@ -13,8 +13,8 @@ import (
 )
 
 const insertClickEvent = `-- name: InsertClickEvent :one
-INSERT INTO click_events (short_url_id, clicked_at, referrer_host, user_agent_raw, ip_hash, stream_id)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO click_events (short_url_id, clicked_at, referrer_host, user_agent_raw, ip_hash, country_code, os, browser, stream_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT (clicked_at, stream_id) DO NOTHING
 RETURNING id
 `
@@ -25,6 +25,9 @@ type InsertClickEventParams struct {
 	ReferrerHost pgtype.Text        `json:"referrer_host"`
 	UserAgentRaw pgtype.Text        `json:"user_agent_raw"`
 	IpHash       pgtype.Text        `json:"ip_hash"`
+	CountryCode  pgtype.Text        `json:"country_code"`
+	Os           pgtype.Text        `json:"os"`
+	Browser      pgtype.Text        `json:"browser"`
 	StreamID     string             `json:"stream_id"`
 }
 
@@ -35,6 +38,9 @@ func (q *Queries) InsertClickEvent(ctx context.Context, arg InsertClickEventPara
 		arg.ReferrerHost,
 		arg.UserAgentRaw,
 		arg.IpHash,
+		arg.CountryCode,
+		arg.Os,
+		arg.Browser,
 		arg.StreamID,
 	)
 	var id int64

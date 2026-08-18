@@ -30,6 +30,8 @@ type Querier interface {
 	FindAdminUserByID(ctx context.Context, id uuid.UUID) (*FindAdminUserByIDRow, error)
 	FindAuthIdentity(ctx context.Context, arg FindAuthIdentityParams) (*FindAuthIdentityRow, error)
 	FindAuthSettings(ctx context.Context) (*FindAuthSettingsRow, error)
+	FindBrowserClickCounts(ctx context.Context, arg FindBrowserClickCountsParams) ([]*FindBrowserClickCountsRow, error)
+	FindCountryClickCounts(ctx context.Context, arg FindCountryClickCountsParams) ([]*FindCountryClickCountsRow, error)
 	FindDailyClickCounts(ctx context.Context, arg FindDailyClickCountsParams) ([]*FindDailyClickCountsRow, error)
 	FindDefaultDomain(ctx context.Context) (uuid.UUID, error)
 	// click_stats_daily(UTC単位で丸めてロールアップ済み。stats.RecordBatch)と
@@ -40,6 +42,7 @@ type Querier interface {
 	FindLocalCredential(ctx context.Context, userID uuid.UUID) (*LocalCredential, error)
 	FindLocalSignupVerificationByTokenHash(ctx context.Context, tokenHash string) (*FindLocalSignupVerificationByTokenHashRow, error)
 	FindOIDCConfigByID(ctx context.Context, id uuid.UUID) (*IdpOidcConfig, error)
+	FindOSClickCounts(ctx context.Context, arg FindOSClickCountsParams) ([]*FindOSClickCountsRow, error)
 	FindPendingLinkRequestByID(ctx context.Context, id uuid.UUID) (*FindPendingLinkRequestByIDRow, error)
 	FindPendingLinkRequestByTokenHash(ctx context.Context, tokenHash string) (*FindPendingLinkRequestByTokenHashRow, error)
 	FindPendingLinkRequestsForUser(ctx context.Context, existingUserID uuid.UUID) ([]*FindPendingLinkRequestsForUserRow, error)

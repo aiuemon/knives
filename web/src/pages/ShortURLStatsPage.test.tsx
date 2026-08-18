@@ -43,6 +43,18 @@ const statsWithData: ShortURLStats = {
 		{ referrer_host: "google.com", click_count: 5 },
 		{ referrer_host: "", click_count: 2 },
 	],
+	by_country: [
+		{ country_code: "JP", click_count: 5 },
+		{ country_code: "US", click_count: 2 },
+	],
+	by_os: [
+		{ os: "Windows", click_count: 4 },
+		{ os: "iPadOS", click_count: 3 },
+	],
+	by_browser: [
+		{ browser: "Chrome", click_count: 5 },
+		{ browser: "other", click_count: 2 },
+	],
 };
 
 const emptyStats: ShortURLStats = {
@@ -51,6 +63,9 @@ const emptyStats: ShortURLStats = {
 	granularity: "day",
 	daily: [],
 	by_referrer: [],
+	by_country: [],
+	by_os: [],
+	by_browser: [],
 };
 
 const singleDayStats: ShortURLStats = {
@@ -59,12 +74,18 @@ const singleDayStats: ShortURLStats = {
 	granularity: "day",
 	daily: [{ date: "2026-08-08", click_count: 3 }],
 	by_referrer: [{ referrer_host: "", click_count: 3 }],
+	by_country: [],
+	by_os: [],
+	by_browser: [],
 };
 
 const hourlyStats: ShortURLStats = {
 	from: "2026-08-08",
 	to: "2026-08-08",
 	granularity: "hour",
+	by_country: [],
+	by_os: [],
+	by_browser: [],
 	hourly: [
 		{ hour: "2026-08-08T12:00:00.000Z", click_count: 2 },
 		{ hour: "2026-08-08T14:00:00.000Z", click_count: 1 },
@@ -156,9 +177,11 @@ describe("ShortURLStatsPage", () => {
 		renderPage(emptyStats);
 		await screen.findByText(/abc123/);
 
+		// 日別グラフ・参照元テーブル・国別/OS別/ブラウザ別の円グラフ、
+		// 計5箇所すべてが空状態メッセージを表示する。
 		expect(
 			screen.getAllByText("この期間のクリックはありません。"),
-		).toHaveLength(2);
+		).toHaveLength(5);
 	});
 
 	it("zero-fills days without clicks so the line covers the full selected range", async () => {
@@ -228,6 +251,34 @@ describe("ShortURLStatsPage", () => {
 		// X軸: 範囲の開始日・終了日のラベル(MM-DD表記)
 		expect(within(chartArea).getByText("08-01")).toBeInTheDocument();
 		expect(within(chartArea).getByText("08-07")).toBeInTheDocument();
+	});
+
+	it('shows country/OS/browser pie charts, mapping the browser="other" bucket to その他', async () => {
+		renderPage(statsWithData);
+		await screen.findByText(/abc123/);
+
+		const countryChart = screen.getByRole("img", {
+			name: "アクセス元国別クリック数の円グラフ",
+		});
+		expect(countryChart).toBeInTheDocument();
+		expect(screen.getByText("JP")).toBeInTheDocument();
+		expect(screen.getByText("US")).toBeInTheDocument();
+
+		const osChart = screen.getByRole("img", {
+			name: "OS別クリック数の円グラフ",
+		});
+		expect(osChart).toBeInTheDocument();
+		expect(screen.getByText("Windows")).toBeInTheDocument();
+		expect(screen.getByText("iPadOS")).toBeInTheDocument();
+
+		const browserChart = screen.getByRole("img", {
+			name: "ブラウザ別クリック数の円グラフ",
+		});
+		expect(browserChart).toBeInTheDocument();
+		expect(screen.getByText("Chrome")).toBeInTheDocument();
+		// GetStatsが上位10種以外を合算した"other"は、フロントで
+		// 「その他」として表示する。
+		expect(screen.getByText("その他")).toBeInTheDocument();
 	});
 
 	it("changes the requested range when a preset is selected", async () => {

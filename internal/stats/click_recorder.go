@@ -28,6 +28,16 @@ type ClickEvent struct {
 	ReferrerHost string
 	UserAgentRaw string
 	IPHash       string
+	// CountryCode is resolved by cmd/redirect (internal/geoip) before the
+	// client IP is hashed away — ip_hash is one-way, so this is the only
+	// point in the pipeline country resolution can ever happen at.
+	CountryCode string
+	// OS and Browser are parsed from UserAgentRaw once here at ingestion
+	// time (internal/useragent), off the cmd/redirect hot path, so
+	// querying by OS/browser (4節) is a plain indexed GROUP BY instead of
+	// re-parsing user_agent_raw on every stats request.
+	OS      string
+	Browser string
 }
 
 // Store is the persistence port RecordBatch depends on.

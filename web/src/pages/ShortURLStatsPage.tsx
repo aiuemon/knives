@@ -4,6 +4,7 @@ import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { ShortURL, ShortURLStats } from "../api/types";
 import { Header } from "../components/Header";
+import { PieChart, type PieChartSlice } from "../components/PieChart";
 
 // internal/stats.maxRangeDaysと合わせる。これを超える範囲を
 // リクエストするとAPIが400を返す。
@@ -127,6 +128,27 @@ export function ShortURLStatsPage() {
 	const byReferrer = statsQuery.data?.by_referrer ?? [];
 	const totalClicks = activePoints.reduce((sum, p) => sum + p.click_count, 0);
 	const maxCount = Math.max(1, ...activePoints.map((p) => p.click_count));
+
+	const countrySlices: PieChartSlice[] = (
+		statsQuery.data?.by_country ?? []
+	).map((c) => ({
+		key: c.country_code || "unknown",
+		label: c.country_code || "不明",
+		value: c.click_count,
+	}));
+	const osSlices: PieChartSlice[] = (statsQuery.data?.by_os ?? []).map((o) => ({
+		key: o.os || "unknown",
+		label: o.os || "不明",
+		value: o.click_count,
+	}));
+	// browser="other"はGetStatsが上位10種以外を合算したバケット(4節)。
+	const browserSlices: PieChartSlice[] = (
+		statsQuery.data?.by_browser ?? []
+	).map((b) => ({
+		key: b.browser || "unknown",
+		label: b.browser === "other" ? "その他" : b.browser || "不明",
+		value: b.click_count,
+	}));
 
 	// click_stats_daily/click_eventsはクリックのあった日・時間のみ行を
 	// 持つため、activePointsは範囲内を飛び飛びにしか含まない。横軸を
@@ -364,6 +386,28 @@ export function ShortURLStatsPage() {
 								</tbody>
 							</table>
 						)}
+
+						<div className="mt-8">
+							<PieChart
+								title="アクセス元国"
+								ariaLabel="アクセス元国別クリック数の円グラフ"
+								data={countrySlices}
+							/>
+						</div>
+						<div className="mt-8">
+							<PieChart
+								title="OS別クリック数"
+								ariaLabel="OS別クリック数の円グラフ"
+								data={osSlices}
+							/>
+						</div>
+						<div className="mt-8">
+							<PieChart
+								title="ブラウザ別クリック数"
+								ariaLabel="ブラウザ別クリック数の円グラフ"
+								data={browserSlices}
+							/>
+						</div>
 					</>
 				)}
 			</div>

@@ -1,9 +1,39 @@
 package main
 
 import (
+	"net"
 	"net/http"
 	"testing"
+
+	"github.com/google/uuid"
+
+	"github.com/aiuemon/knives/internal/geoip"
 )
+
+type fakeGeoResolver struct {
+	countryCode string
+	ok          bool
+}
+
+func (f fakeGeoResolver) Lookup(net.IP) (string, bool) { return f.countryCode, f.ok }
+
+func TestBuildClickValues_IncludesResolvedCountryCode(t *testing.T) {
+	r := &http.Request{RemoteAddr: "203.0.113.5:54321", Header: http.Header{}}
+	values := buildClickValues(uuid.New(), r, "salt", fakeGeoResolver{countryCode: "JP", ok: true})
+
+	if values["country_code"] != "JP" {
+		t.Fatalf("expected country_code %q, got %+v", "JP", values["country_code"])
+	}
+}
+
+func TestBuildClickValues_UnresolvedCountryIsEmpty(t *testing.T) {
+	r := &http.Request{RemoteAddr: "203.0.113.5:54321", Header: http.Header{}}
+	values := buildClickValues(uuid.New(), r, "salt", geoip.NoopResolver{})
+
+	if values["country_code"] != "" {
+		t.Fatalf("expected empty country_code when unresolved, got %+v", values["country_code"])
+	}
+}
 
 func TestClientIP_StripsPort(t *testing.T) {
 	r := &http.Request{RemoteAddr: "203.0.113.5:54321"}

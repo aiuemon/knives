@@ -28,6 +28,21 @@ type statsReferrerResponse struct {
 	ClickCount   int64  `json:"click_count"`
 }
 
+type statsCountryResponse struct {
+	CountryCode string `json:"country_code"`
+	ClickCount  int64  `json:"click_count"`
+}
+
+type statsOSResponse struct {
+	OS         string `json:"os"`
+	ClickCount int64  `json:"click_count"`
+}
+
+type statsBrowserResponse struct {
+	Browser    string `json:"browser"`
+	ClickCount int64  `json:"click_count"`
+}
+
 type shortURLStatsResponse struct {
 	From        string                  `json:"from"`
 	To          string                  `json:"to"`
@@ -35,6 +50,9 @@ type shortURLStatsResponse struct {
 	Daily       []statsDailyResponse    `json:"daily,omitempty"`
 	Hourly      []statsHourlyResponse   `json:"hourly,omitempty"`
 	ByReferrer  []statsReferrerResponse `json:"by_referrer"`
+	ByCountry   []statsCountryResponse  `json:"by_country"`
+	ByOS        []statsOSResponse       `json:"by_os"`
+	ByBrowser   []statsBrowserResponse  `json:"by_browser"`
 }
 
 // toShortURLStatsResponse formats summary for the client. from/to are the
@@ -55,6 +73,18 @@ func toShortURLStatsResponse(summary *stats.Summary, from, to time.Time) shortUR
 	for _, r := range summary.ByReferrer {
 		referrers = append(referrers, statsReferrerResponse{ReferrerHost: r.ReferrerHost, ClickCount: r.ClickCount})
 	}
+	countries := make([]statsCountryResponse, 0, len(summary.ByCountry))
+	for _, c := range summary.ByCountry {
+		countries = append(countries, statsCountryResponse{CountryCode: c.CountryCode, ClickCount: c.ClickCount})
+	}
+	oses := make([]statsOSResponse, 0, len(summary.ByOS))
+	for _, o := range summary.ByOS {
+		oses = append(oses, statsOSResponse{OS: o.OS, ClickCount: o.ClickCount})
+	}
+	browsers := make([]statsBrowserResponse, 0, len(summary.ByBrowser))
+	for _, b := range summary.ByBrowser {
+		browsers = append(browsers, statsBrowserResponse{Browser: b.Browser, ClickCount: b.ClickCount})
+	}
 	return shortURLStatsResponse{
 		From:        from.Format(statsDateLayout),
 		To:          to.Format(statsDateLayout),
@@ -62,6 +92,9 @@ func toShortURLStatsResponse(summary *stats.Summary, from, to time.Time) shortUR
 		Daily:       daily,
 		Hourly:      hourly,
 		ByReferrer:  referrers,
+		ByCountry:   countries,
+		ByOS:        oses,
+		ByBrowser:   browsers,
 	}
 }
 
