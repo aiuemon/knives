@@ -70,3 +70,51 @@ func (s *StatsStore) ReferrerCounts(ctx context.Context, shortURLID uuid.UUID, f
 	}
 	return result, nil
 }
+
+func (s *StatsStore) CountryCounts(ctx context.Context, shortURLID uuid.UUID, from, to time.Time) ([]stats.CountryCount, error) {
+	rows, err := s.Q.FindCountryClickCounts(ctx, FindCountryClickCountsParams{
+		ShortUrlID:  shortURLID,
+		ClickedAt:   pgtype.Timestamptz{Time: from, Valid: true},
+		ClickedAt_2: pgtype.Timestamptz{Time: to, Valid: true},
+	})
+	if err != nil {
+		return nil, err
+	}
+	result := make([]stats.CountryCount, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, stats.CountryCount{CountryCode: row.CountryCode, ClickCount: row.ClickCount})
+	}
+	return result, nil
+}
+
+func (s *StatsStore) OSCounts(ctx context.Context, shortURLID uuid.UUID, from, to time.Time) ([]stats.OSCount, error) {
+	rows, err := s.Q.FindOSClickCounts(ctx, FindOSClickCountsParams{
+		ShortUrlID:  shortURLID,
+		ClickedAt:   pgtype.Timestamptz{Time: from, Valid: true},
+		ClickedAt_2: pgtype.Timestamptz{Time: to, Valid: true},
+	})
+	if err != nil {
+		return nil, err
+	}
+	result := make([]stats.OSCount, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, stats.OSCount{OS: row.Os, ClickCount: row.ClickCount})
+	}
+	return result, nil
+}
+
+func (s *StatsStore) BrowserCounts(ctx context.Context, shortURLID uuid.UUID, from, to time.Time) ([]stats.BrowserCount, error) {
+	rows, err := s.Q.FindBrowserClickCounts(ctx, FindBrowserClickCountsParams{
+		ShortUrlID:  shortURLID,
+		ClickedAt:   pgtype.Timestamptz{Time: from, Valid: true},
+		ClickedAt_2: pgtype.Timestamptz{Time: to, Valid: true},
+	})
+	if err != nil {
+		return nil, err
+	}
+	result := make([]stats.BrowserCount, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, stats.BrowserCount{Browser: row.Browser, ClickCount: row.ClickCount})
+	}
+	return result, nil
+}

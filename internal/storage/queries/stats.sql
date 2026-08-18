@@ -26,3 +26,30 @@ WHERE short_url_id = $1
   AND clicked_at < $3
 GROUP BY referrer_host
 ORDER BY click_count DESC;
+
+-- name: FindCountryClickCounts :many
+SELECT COALESCE(country_code, '') AS country_code, COUNT(*) AS click_count
+FROM click_events
+WHERE short_url_id = $1
+  AND clicked_at >= $2
+  AND clicked_at < $3
+GROUP BY country_code
+ORDER BY click_count DESC;
+
+-- name: FindOSClickCounts :many
+SELECT COALESCE(os, '') AS os, COUNT(*) AS click_count
+FROM click_events
+WHERE short_url_id = $1
+  AND clicked_at >= $2
+  AND clicked_at < $3
+GROUP BY os
+ORDER BY click_count DESC;
+
+-- name: FindBrowserClickCounts :many
+SELECT COALESCE(browser, '') AS browser, COUNT(*) AS click_count
+FROM click_events
+WHERE short_url_id = $1
+  AND clicked_at >= $2
+  AND clicked_at < $3
+GROUP BY browser
+ORDER BY click_count DESC;

@@ -595,9 +595,9 @@ func TestStatsStore_DailyAndReferrerCounts(t *testing.T) {
 	}
 
 	events := []stats.ClickEvent{
-		{StreamID: "s1-0", ShortURLID: su.ID, ClickedAt: day1.Add(1 * time.Hour), ReferrerHost: "google.com", IPHash: "h1"},
-		{StreamID: "s1-1", ShortURLID: su.ID, ClickedAt: day1.Add(2 * time.Hour), ReferrerHost: "google.com", IPHash: "h2"},
-		{StreamID: "s1-2", ShortURLID: su.ID, ClickedAt: day2.Add(1 * time.Hour), ReferrerHost: "", IPHash: "h3"},
+		{StreamID: "s1-0", ShortURLID: su.ID, ClickedAt: day1.Add(1 * time.Hour), ReferrerHost: "google.com", IPHash: "h1", CountryCode: "JP", OS: "Windows", Browser: "Chrome"},
+		{StreamID: "s1-1", ShortURLID: su.ID, ClickedAt: day1.Add(2 * time.Hour), ReferrerHost: "google.com", IPHash: "h2", CountryCode: "JP", OS: "macOS", Browser: "Safari"},
+		{StreamID: "s1-2", ShortURLID: su.ID, ClickedAt: day2.Add(1 * time.Hour), ReferrerHost: "", IPHash: "h3", CountryCode: "US", OS: "Windows", Browser: "Chrome"},
 	}
 	for _, ev := range events {
 		if _, err := clickStore.InsertClickEvent(ctx, ev); err != nil {
@@ -637,6 +637,30 @@ func TestStatsStore_DailyAndReferrerCounts(t *testing.T) {
 	}
 	if referrers[0].ReferrerHost != "google.com" || referrers[0].ClickCount != 2 {
 		t.Fatalf("expected google.com with count 2 to sort first (DESC by count), got %+v", referrers[0])
+	}
+
+	countries, err := statsStore.CountryCounts(ctx, su.ID, from, to.Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("CountryCounts: %v", err)
+	}
+	if len(countries) != 2 || countries[0].CountryCode != "JP" || countries[0].ClickCount != 2 {
+		t.Fatalf("expected JP with count 2 to sort first (DESC by count), got %+v", countries)
+	}
+
+	oses, err := statsStore.OSCounts(ctx, su.ID, from, to.Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("OSCounts: %v", err)
+	}
+	if len(oses) != 2 || oses[0].OS != "Windows" || oses[0].ClickCount != 2 {
+		t.Fatalf("expected Windows with count 2 to sort first (DESC by count), got %+v", oses)
+	}
+
+	browsers, err := statsStore.BrowserCounts(ctx, su.ID, from, to.Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("BrowserCounts: %v", err)
+	}
+	if len(browsers) != 2 || browsers[0].Browser != "Chrome" || browsers[0].ClickCount != 2 {
+		t.Fatalf("expected Chrome with count 2 to sort first (DESC by count), got %+v", browsers)
 	}
 }
 

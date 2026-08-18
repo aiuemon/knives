@@ -12,6 +12,88 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const findBrowserClickCounts = `-- name: FindBrowserClickCounts :many
+SELECT COALESCE(browser, '') AS browser, COUNT(*) AS click_count
+FROM click_events
+WHERE short_url_id = $1
+  AND clicked_at >= $2
+  AND clicked_at < $3
+GROUP BY browser
+ORDER BY click_count DESC
+`
+
+type FindBrowserClickCountsParams struct {
+	ShortUrlID  uuid.UUID          `json:"short_url_id"`
+	ClickedAt   pgtype.Timestamptz `json:"clicked_at"`
+	ClickedAt_2 pgtype.Timestamptz `json:"clicked_at_2"`
+}
+
+type FindBrowserClickCountsRow struct {
+	Browser    string `json:"browser"`
+	ClickCount int64  `json:"click_count"`
+}
+
+func (q *Queries) FindBrowserClickCounts(ctx context.Context, arg FindBrowserClickCountsParams) ([]*FindBrowserClickCountsRow, error) {
+	rows, err := q.db.Query(ctx, findBrowserClickCounts, arg.ShortUrlID, arg.ClickedAt, arg.ClickedAt_2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*FindBrowserClickCountsRow
+	for rows.Next() {
+		var i FindBrowserClickCountsRow
+		if err := rows.Scan(&i.Browser, &i.ClickCount); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const findCountryClickCounts = `-- name: FindCountryClickCounts :many
+SELECT COALESCE(country_code, '') AS country_code, COUNT(*) AS click_count
+FROM click_events
+WHERE short_url_id = $1
+  AND clicked_at >= $2
+  AND clicked_at < $3
+GROUP BY country_code
+ORDER BY click_count DESC
+`
+
+type FindCountryClickCountsParams struct {
+	ShortUrlID  uuid.UUID          `json:"short_url_id"`
+	ClickedAt   pgtype.Timestamptz `json:"clicked_at"`
+	ClickedAt_2 pgtype.Timestamptz `json:"clicked_at_2"`
+}
+
+type FindCountryClickCountsRow struct {
+	CountryCode string `json:"country_code"`
+	ClickCount  int64  `json:"click_count"`
+}
+
+func (q *Queries) FindCountryClickCounts(ctx context.Context, arg FindCountryClickCountsParams) ([]*FindCountryClickCountsRow, error) {
+	rows, err := q.db.Query(ctx, findCountryClickCounts, arg.ShortUrlID, arg.ClickedAt, arg.ClickedAt_2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*FindCountryClickCountsRow
+	for rows.Next() {
+		var i FindCountryClickCountsRow
+		if err := rows.Scan(&i.CountryCode, &i.ClickCount); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const findDailyClickCounts = `-- name: FindDailyClickCounts :many
 SELECT date, click_count
 FROM click_stats_daily
@@ -86,6 +168,47 @@ func (q *Queries) FindHourlyClickCounts(ctx context.Context, arg FindHourlyClick
 	for rows.Next() {
 		var i FindHourlyClickCountsRow
 		if err := rows.Scan(&i.Hour, &i.ClickCount); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const findOSClickCounts = `-- name: FindOSClickCounts :many
+SELECT COALESCE(os, '') AS os, COUNT(*) AS click_count
+FROM click_events
+WHERE short_url_id = $1
+  AND clicked_at >= $2
+  AND clicked_at < $3
+GROUP BY os
+ORDER BY click_count DESC
+`
+
+type FindOSClickCountsParams struct {
+	ShortUrlID  uuid.UUID          `json:"short_url_id"`
+	ClickedAt   pgtype.Timestamptz `json:"clicked_at"`
+	ClickedAt_2 pgtype.Timestamptz `json:"clicked_at_2"`
+}
+
+type FindOSClickCountsRow struct {
+	Os         string `json:"os"`
+	ClickCount int64  `json:"click_count"`
+}
+
+func (q *Queries) FindOSClickCounts(ctx context.Context, arg FindOSClickCountsParams) ([]*FindOSClickCountsRow, error) {
+	rows, err := q.db.Query(ctx, findOSClickCounts, arg.ShortUrlID, arg.ClickedAt, arg.ClickedAt_2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*FindOSClickCountsRow
+	for rows.Next() {
+		var i FindOSClickCountsRow
+		if err := rows.Scan(&i.Os, &i.ClickCount); err != nil {
 			return nil, err
 		}
 		items = append(items, &i)

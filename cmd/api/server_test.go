@@ -449,6 +449,9 @@ type fakeStatsReader struct {
 	daily      map[uuid.UUID][]stats.DailyCount
 	hourly     map[uuid.UUID][]stats.HourlyCount
 	referrers  map[uuid.UUID][]stats.ReferrerCount
+	countries  map[uuid.UUID][]stats.CountryCount
+	oses       map[uuid.UUID][]stats.OSCount
+	browsers   map[uuid.UUID][]stats.BrowserCount
 	calledWith struct {
 		shortURLID uuid.UUID
 		from, to   time.Time
@@ -460,6 +463,9 @@ func newFakeStatsReader() *fakeStatsReader {
 		daily:     map[uuid.UUID][]stats.DailyCount{},
 		hourly:    map[uuid.UUID][]stats.HourlyCount{},
 		referrers: map[uuid.UUID][]stats.ReferrerCount{},
+		countries: map[uuid.UUID][]stats.CountryCount{},
+		oses:      map[uuid.UUID][]stats.OSCount{},
+		browsers:  map[uuid.UUID][]stats.BrowserCount{},
 	}
 }
 
@@ -479,6 +485,18 @@ func (r *fakeStatsReader) HourlyCounts(_ context.Context, shortURLID uuid.UUID, 
 
 func (r *fakeStatsReader) ReferrerCounts(_ context.Context, shortURLID uuid.UUID, _, _ time.Time) ([]stats.ReferrerCount, error) {
 	return r.referrers[shortURLID], nil
+}
+
+func (r *fakeStatsReader) CountryCounts(_ context.Context, shortURLID uuid.UUID, _, _ time.Time) ([]stats.CountryCount, error) {
+	return r.countries[shortURLID], nil
+}
+
+func (r *fakeStatsReader) OSCounts(_ context.Context, shortURLID uuid.UUID, _, _ time.Time) ([]stats.OSCount, error) {
+	return r.oses[shortURLID], nil
+}
+
+func (r *fakeStatsReader) BrowserCounts(_ context.Context, shortURLID uuid.UUID, _, _ time.Time) ([]stats.BrowserCount, error) {
+	return r.browsers[shortURLID], nil
 }
 
 type fakeWebAuthnCredentialStore struct {
@@ -1671,6 +1689,15 @@ func TestHandleGetShortURLStats_OwnerSeesDailyAndReferrerBreakdown(t *testing.T)
 	d.statsReader.referrers[created.ID] = []stats.ReferrerCount{
 		{ReferrerHost: "google.com", ClickCount: 3},
 	}
+	d.statsReader.countries[created.ID] = []stats.CountryCount{
+		{CountryCode: "JP", ClickCount: 3},
+	}
+	d.statsReader.oses[created.ID] = []stats.OSCount{
+		{OS: "Windows", ClickCount: 3},
+	}
+	d.statsReader.browsers[created.ID] = []stats.BrowserCount{
+		{Browser: "Chrome", ClickCount: 3},
+	}
 
 	req := withSessionCookie(httptest.NewRequest(http.MethodGet, "/api/short-urls/"+created.ID.String()+"/stats?from=2026-08-01&to=2026-08-07", nil), token)
 	rec := httptest.NewRecorder()
@@ -1691,6 +1718,15 @@ func TestHandleGetShortURLStats_OwnerSeesDailyAndReferrerBreakdown(t *testing.T)
 	}
 	if len(resp.ByReferrer) != 1 || resp.ByReferrer[0].ReferrerHost != "google.com" {
 		t.Fatalf("expected the referrer breakdown to pass through, got %+v", resp.ByReferrer)
+	}
+	if len(resp.ByCountry) != 1 || resp.ByCountry[0].CountryCode != "JP" {
+		t.Fatalf("expected the country breakdown to pass through, got %+v", resp.ByCountry)
+	}
+	if len(resp.ByOS) != 1 || resp.ByOS[0].OS != "Windows" {
+		t.Fatalf("expected the OS breakdown to pass through, got %+v", resp.ByOS)
+	}
+	if len(resp.ByBrowser) != 1 || resp.ByBrowser[0].Browser != "Chrome" {
+		t.Fatalf("expected the browser breakdown to pass through, got %+v", resp.ByBrowser)
 	}
 	if len(d.authStore.audit) != 0 {
 		t.Fatalf("an owner viewing their own URL's stats must not write a stats.admin_view audit entry, got %+v", d.authStore.audit)
