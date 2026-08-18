@@ -61,6 +61,22 @@ export interface ShortURLReferrerStat {
 	click_count: number;
 }
 
+export interface ShortURLCountryStat {
+	country_code: string; // ISO 3166-1 alpha-2。GeoIP未設定/未解決時は""
+	click_count: number;
+}
+
+export interface ShortURLOSStat {
+	os: string; // 分類不能時は""
+	click_count: number;
+}
+
+// browserは分類不能時は""、上位10種以外をまとめた合算枠は"other"
+export interface ShortURLBrowserStat {
+	browser: string;
+	click_count: number;
+}
+
 // ShortURLStats is GET /short-urls/{id}/stats (4節)。from/toはリクエストで
 // 指定した(または既定の)日付範囲そのまま(YYYY-MM-DD)。granularityに応じて
 // dailyまたはhourlyの一方だけが入る。
@@ -71,6 +87,9 @@ export interface ShortURLStats {
 	daily?: ShortURLDailyStat[];
 	hourly?: ShortURLHourlyStat[];
 	by_referrer: ShortURLReferrerStat[];
+	by_country: ShortURLCountryStat[];
+	by_os: ShortURLOSStat[];
+	by_browser: ShortURLBrowserStat[];
 }
 
 export interface URLPermissionGrant {
