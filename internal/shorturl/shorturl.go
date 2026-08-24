@@ -341,9 +341,22 @@ func normalizeLongURL(raw string) (string, error) {
 
 var aliasPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
 
+// reservedAliases are short_code values that would collide with the path
+// segments a reverse proxy routes to the api/web services when api/
+// redirect/web are unified behind a single FQDN (deploy/nginx/nginx.conf):
+// "/api/*" goes to cmd/api and "/app/*" goes to the SPA, so a short URL
+// using either as its code would never reach cmd/redirect.
+var reservedAliases = map[string]struct{}{
+	"api": {},
+	"app": {},
+}
+
 func normalizeAlias(raw string) (string, error) {
 	alias := strings.TrimSpace(raw)
 	if !aliasPattern.MatchString(alias) {
+		return "", ErrInvalidAlias
+	}
+	if _, reserved := reservedAliases[alias]; reserved {
 		return "", ErrInvalidAlias
 	}
 	return alias, nil

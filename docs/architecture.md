@@ -69,8 +69,9 @@ flowchart LR
   subgraph Client
     Browser["ブラウザ (SPA)"]
   end
-  Browser -->|"/s/{code} 高頻度"| Redirect["redirect service (複数台)"]
+  Browser -->|"/{code} 高頻度"| Redirect["redirect service (複数台)"]
   Browser -->|"/api/... 管理系"| API["api service (複数台)"]
+  Browser -->|"/app/... SPA"| Web["web (SPA)"]
   Redirect -->|cache-aside| Redis[(Redis)]
   Redirect -.->|cache miss時のみ| PG[(PostgreSQL)]
   Redirect -->|非同期push| Stream["Redis Stream: clicks"]
@@ -87,6 +88,24 @@ flowchart LR
 - クリックイベント記録はリダイレクト応答をブロックしない(非同期・at-least-once許容)
 - 認証は `internal/auth` に集約し、SAML/OIDC/ローカル/パスキーいずれの経路でも「ユーザ識別・アカウント統合」ロジックを一本化する(分散させるとセキュリティホールの温床になる)
 - 管理者の設定変更、権限付与、アカウント統合イベントは全て監査ログに記録する
+
+### 1.4 サービス統合(1つのFQDN化)
+
+`api`・`redirect`・`web`はそれぞれ別ポートで待ち受けるため、開発/デプロイ環境ではリバースプロキシ(nginx、`deploy/nginx/nginx.conf`)を1つのエントリーポイントとしてパスベースでルーティングする(docker composeでの構成は`docker-compose.yaml`)。
+
+| パス | 転送先 | 備考 |
+|---|---|---|
+| `/api/*` | `api` | 既存の`r.Route("/api", ...)`に対応 |
+| `/app/*` | `web`(SPA) | SPAはここに統合されている(下記の理由) |
+| それ以外すべて(ルート直下) | `redirect` | 短縮コード解決(`GET /{code}`) |
+
+**SPAを`/app`配下に統合している理由**: SPAは元々ルート直下(`/login`・`/admin/settings`等)にルーティングしていたが、`redirect`が解決する短縮コードも同じくルート直下(`/{code}`)にある。1つのFQDNにまとめると両者が衝突する(短縮コード`login`や`admin`が管理画面のルートを踏み潰す)。予約パス方式(`/login`等を個別に予約)ではなく、SPAをプレフィックス配下に丸ごと移動する方式を採用した — 予約すべきセグメントが`api`・`app`の2つだけで済み、将来SPAにルートが増えても予約語のメンテナンスが不要なため。
+
+この結果、**短縮コードの予約語として`api`・`app`が使えない**(`internal/shorturl.normalizeAlias`で拒否)。
+
+`WEB_PUBLIC_BASE_URL`はWebAuthnのRPID/RPOrigins算出にも使われ、スキーム+ホスト+ポートの完全一致が要求されるため**パスを含められない**。そのため`WEB_PUBLIC_BASE_URL`自体はオリジンのみを保持し、SPAへのページリンク(確認メール・OIDC/SAML後のリダイレクト等)を組み立てる箇所にだけ`cmd/api`側の定数`webAppPathPrefix`(`/app`)を挟んで連結する。`API_PUBLIC_BASE_URL`はSAML/OIDCのコールバックURL組み立てで元々`/api/...`を明示的に連結しているため変更不要。統合後は`WEB_PUBLIC_BASE_URL`と`API_PUBLIC_BASE_URL`が同一オリジンになり、ブラウザから見て同一オリジンなのでCORS設定が不要になる副次的なメリットがある。
+
+ローカルのdocker compose環境では`knives.localhost`(RFC 6761でループバックに自動解決される特殊TLD)をFQDNとし、既定で`http://knives.localhost:8000/app/`にアクセスする(`PROXY_PORT`で変更可能)。
 
 ---
 
@@ -421,7 +440,7 @@ system_adminによる他者URLの閲覧は無制限に許可するが、`audit_l
 |---|---|
 | フレームワーク | React 19 + TypeScript + Vite |
 | UIキット | Tailwind CSS(独自コンポーネント。shadcn/ui等のキットは未導入) |
-| ルーティング | react-router-dom |
+| ルーティング | react-router-dom(`basename="/app"`。1.4節のサービス統合に伴い、SPAは`/app`配下に統合) |
 | データフェッチ | TanStack Query |
 | クライアント状態 | 個別コンポーネントの `useState`(TanStack Queryのキャッシュで大半を賄えており、グローバル状態管理ライブラリを追加する必要が生じていない) |
 | フォーム/バリデーション | プレーンなcontrolled input + HTML標準バリデーション(React Hook Form/Zodは未導入) |

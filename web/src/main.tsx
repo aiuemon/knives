@@ -16,7 +16,7 @@ if (!rootElement) {
 createRoot(rootElement).render(
 	<StrictMode>
 		<QueryClientProvider client={queryClient}>
-			<BrowserRouter>
+			<BrowserRouter basename="/app">
 				<AuthProvider>
 					<App />
 				</AuthProvider>

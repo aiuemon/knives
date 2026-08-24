@@ -79,25 +79,25 @@ func (s *server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, auth.ErrOIDCResponseInvalid):
 		slog.Warn("oidc callback rejected", "error", err)
-		http.Redirect(w, r, s.webPublicBaseURL+"/login?error=oidc_failed", http.StatusFound)
+		http.Redirect(w, r, s.webPublicBaseURL+webAppPathPrefix+"/login?error=oidc_failed", http.StatusFound)
 		return
 	case err != nil:
 		slog.Error("oidc callback failed", "error", err)
-		http.Redirect(w, r, s.webPublicBaseURL+"/login?error=oidc_failed", http.StatusFound)
+		http.Redirect(w, r, s.webPublicBaseURL+webAppPathPrefix+"/login?error=oidc_failed", http.StatusFound)
 		return
 	}
 
 	switch result.Outcome {
 	case auth.OutcomePendingConfirmation:
-		http.Redirect(w, r, s.webPublicBaseURL+"/login?notice=oidc_pending_confirmation", http.StatusFound)
+		http.Redirect(w, r, s.webPublicBaseURL+webAppPathPrefix+"/login?notice=oidc_pending_confirmation", http.StatusFound)
 	default:
 		sessionToken, err := s.sessions.Create(r.Context(), result.User.ID, s.sessionTTL)
 		if err != nil {
 			slog.Error("session create failed", "error", err)
-			http.Redirect(w, r, s.webPublicBaseURL+"/login?error=oidc_failed", http.StatusFound)
+			http.Redirect(w, r, s.webPublicBaseURL+webAppPathPrefix+"/login?error=oidc_failed", http.StatusFound)
 			return
 		}
 		s.setSessionCookie(w, sessionToken)
-		http.Redirect(w, r, s.webPublicBaseURL+"/", http.StatusFound)
+		http.Redirect(w, r, s.webPublicBaseURL+webAppPathPrefix+"/", http.StatusFound)
 	}
 }

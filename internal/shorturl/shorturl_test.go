@@ -236,6 +236,32 @@ func TestCreate_InvalidAliasRejectedWithoutStoreCall(t *testing.T) {
 	}
 }
 
+func TestCreate_ReservedAliasRejectedWithoutStoreCall(t *testing.T) {
+	// api/redirect/webを1つのFQDNに統合する構成では"/api/*"と"/app/*"が
+	// cmd/api・webにルーティングされ、cmd/redirectには届かない
+	// (deploy/nginx/nginx.conf)。そのためshort_codeとして"api"/"app"は
+	// 使えないようにする。
+	for _, alias := range []string{"api", "app"} {
+		t.Run(alias, func(t *testing.T) {
+			store := newFakeStore("abc", 5)
+			c := &Service{Store: store}
+
+			_, err := c.Create(context.Background(), CreateInput{
+				DomainID:    uuid.New(),
+				CustomAlias: alias,
+				LongURL:     "https://example.com",
+				CreatedBy:   uuid.New(),
+			})
+			if !errors.Is(err, ErrInvalidAlias) {
+				t.Fatalf("expected ErrInvalidAlias for reserved alias %q, got %v", alias, err)
+			}
+			if store.calls != 0 {
+				t.Fatalf("a reserved alias must fail validation before touching the store, got %d calls", store.calls)
+			}
+		})
+	}
+}
+
 func TestCreate_RejectsNonHTTPLongURL(t *testing.T) {
 	store := newFakeStore("abc", 5)
 	c := &Service{Store: store}
