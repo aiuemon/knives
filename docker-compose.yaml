@@ -45,7 +45,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      target: api
       args:
         TARGET: api
     env_file: .env
@@ -65,7 +64,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      target: redirect
       args:
         TARGET: redirect
     env_file: .env
@@ -83,7 +81,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      target: worker
       args:
         TARGET: worker
     env_file: .env
@@ -104,6 +101,14 @@ services:
     environment:
       VITE_REDIRECT_BASE_URL: "http://knives.localhost:${PROXY_PORT:-8000}"
       PROXY_PORT: "${PROXY_PORT:-8000}"
+    # ホスト側のソースをマウントしてHMRを実際に機能させる
+    # (マウントしないとイメージビルド時点のソースがコンテナに焼き
+    # 込まれたままになり、pnpm devがホストでの編集を検知できない)。
+    # node_modulesは無名ボリュームでコンテナ内のものを維持し、ホストの
+    # (存在しないか、OSが異なる)node_modulesで上書きされないようにする。
+    volumes:
+      - ./web:/app
+      - /app/node_modules
 
   proxy:
     image: nginx:1.27-alpine

@@ -135,6 +135,31 @@ func TestRunMigration_SkipsRowsWithAlreadyExistingShortCode(t *testing.T) {
 	}
 }
 
+func TestRunMigration_SkipsRowsWithReservedShortCode(t *testing.T) {
+	// api/redirect/webを1つのFQDNへ統合する構成(docs/architecture.md
+	// 1.4節)では"api"/"app"がリバースプロキシに先取りされ、これらを
+	// short_codeとして移行してもcmd/redirectには一生届かない。
+	users := newFakeUserResolver()
+	target := newFakeMigrationTarget()
+
+	rows := []yourlsRow{
+		{Keyword: "api", URL: "https://example.com/a", CreatedAt: time.Now()},
+		{Keyword: "app", URL: "https://example.com/b", CreatedAt: time.Now()},
+		{Keyword: "new-one", URL: "https://example.com/c", CreatedAt: time.Now()},
+	}
+
+	s, err := runMigration(context.Background(), users, target, uuid.New(), "system@example.com", rows, nil)
+	if err != nil {
+		t.Fatalf("runMigration: %v", err)
+	}
+	if s.Migrated != 1 || s.Skipped != 2 || s.Failed != 0 {
+		t.Fatalf("expected 1 migrated + 2 skipped (reserved), got %+v", s)
+	}
+	if len(target.inserted) != 1 || target.inserted[0].ShortCode != "new-one" {
+		t.Fatalf("expected only the non-reserved row to be inserted, got %+v", target.inserted)
+	}
+}
+
 func TestRunMigration_OnlySetsClickStatsWhenClicksIsPositive(t *testing.T) {
 	users := newFakeUserResolver()
 	target := newFakeMigrationTarget()

@@ -259,6 +259,9 @@ func (c *Service) Create(ctx context.Context, in CreateInput) (*ShortURL, error)
 		if err != nil {
 			return nil, err
 		}
+		if IsReservedShortCode(code) {
+			continue
+		}
 		su, err := c.insert(ctx, in, longURL, code)
 		if errors.Is(err, ErrCodeCollision) {
 			continue
@@ -345,10 +348,17 @@ var aliasPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
 // segments a reverse proxy routes to the api/web services when api/
 // redirect/web are unified behind a single FQDN (deploy/nginx/nginx.conf):
 // "/api/*" goes to cmd/api and "/app/*" goes to the SPA, so a short URL
-// using either as its code would never reach cmd/redirect.
+// using either as its code would never reach cmd/redirect. nginx's prefix
+// location matching is case-sensitive, but IsReservedShortCode checks
+// case-insensitively anyway to avoid a confusing near-miss like "API".
 var reservedAliases = map[string]struct{}{
 	"api": {},
 	"app": {},
+}
+
+func IsReservedShortCode(code string) bool {
+	_, reserved := reservedAliases[strings.ToLower(code)]
+	return reserved
 }
 
 func normalizeAlias(raw string) (string, error) {
@@ -356,7 +366,7 @@ func normalizeAlias(raw string) (string, error) {
 	if !aliasPattern.MatchString(alias) {
 		return "", ErrInvalidAlias
 	}
-	if _, reserved := reservedAliases[alias]; reserved {
+	if IsReservedShortCode(alias) {
 		return "", ErrInvalidAlias
 	}
 	return alias, nil
