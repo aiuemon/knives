@@ -15,10 +15,12 @@
 
 ```sh
 pnpm install
-pnpm dev       # http://localhost:5173
+pnpm dev       # http://localhost:5173/app/
 ```
 
-開発サーバーは `/api/*` へのリクエストを `http://localhost:8080`(cmd/api)にプロキシする(`vite.config.ts`)。cmd/api・cmd/redirect・PostgreSQL・Redisをローカルで起動しておくこと。
+SPAは`/app`配下に統合されている(`base: "/app/"`、`docs/architecture.md`参照。api/redirect/webを1つのFQDNへ統合するリバースプロキシ構成で、短縮URLのリダイレクトコードとルーティングが衝突しないようにするため)ので、ブラウザでは`/app/`まで含めてアクセスすること。
+
+開発サーバーは `/api/*` へのリクエストを `http://localhost:8080`(cmd/api)にプロキシする(`vite.config.ts`)。cmd/api・cmd/redirect・PostgreSQL・Redisをローカルで起動しておくこと。api/redirect/web/PostgreSQL/Redisをまとめて起動する場合はリポジトリルートの`docker-compose.yaml`(`http://knives.localhost:8000/app/`)を使う。
 
 ## Configuration
 

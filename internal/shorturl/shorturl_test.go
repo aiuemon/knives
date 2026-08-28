@@ -236,6 +236,82 @@ func TestCreate_InvalidAliasRejectedWithoutStoreCall(t *testing.T) {
 	}
 }
 
+func TestCreate_ReservedAliasRejectedWithoutStoreCall(t *testing.T) {
+	// api/redirect/webを1つのFQDNに統合する構成では"/api/*"と"/app/*"が
+	// cmd/api・webにルーティングされ、cmd/redirectには届かない
+	// (deploy/nginx/nginx.conf)。そのためshort_codeとして"api"/"app"は
+	// 使えないようにする。
+	for _, alias := range []string{"api", "app"} {
+		t.Run(alias, func(t *testing.T) {
+			store := newFakeStore("abc", 5)
+			c := &Service{Store: store}
+
+			_, err := c.Create(context.Background(), CreateInput{
+				DomainID:    uuid.New(),
+				CustomAlias: alias,
+				LongURL:     "https://example.com",
+				CreatedBy:   uuid.New(),
+			})
+			if !errors.Is(err, ErrInvalidAlias) {
+				t.Fatalf("expected ErrInvalidAlias for reserved alias %q, got %v", alias, err)
+			}
+			if store.calls != 0 {
+				t.Fatalf("a reserved alias must fail validation before touching the store, got %d calls", store.calls)
+			}
+		})
+	}
+}
+
+func TestCreate_ReservedAliasCheckIsCaseInsensitive(t *testing.T) {
+	// nginxのprefix locationはcase-sensitiveだが、"API"のような紛らわしい
+	// near-missを避けるため、予約語チェック自体は大文字小文字を無視する。
+	for _, alias := range []string{"API", "App", "APP"} {
+		t.Run(alias, func(t *testing.T) {
+			store := newFakeStore("abc", 5)
+			c := &Service{Store: store}
+
+			_, err := c.Create(context.Background(), CreateInput{
+				DomainID:    uuid.New(),
+				CustomAlias: alias,
+				LongURL:     "https://example.com",
+				CreatedBy:   uuid.New(),
+			})
+			if !errors.Is(err, ErrInvalidAlias) {
+				t.Fatalf("expected ErrInvalidAlias for reserved alias %q, got %v", alias, err)
+			}
+		})
+	}
+}
+
+func TestCreate_RandomCodeGenerationSkipsReservedCodes(t *testing.T) {
+	store := newFakeStore("abc", 3)
+	calls := 0
+	candidates := []string{"app", "xyz"}
+	c := &Service{
+		Store: store,
+		RandomCode: func(_ string, _ int) (string, error) {
+			code := candidates[calls]
+			calls++
+			return code, nil
+		},
+	}
+
+	su, err := c.Create(context.Background(), CreateInput{
+		DomainID:  uuid.New(),
+		LongURL:   "https://example.com",
+		CreatedBy: uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if su.ShortCode != "xyz" {
+		t.Fatalf("expected the reserved candidate to be skipped and retried, got %q", su.ShortCode)
+	}
+	if store.calls != 1 {
+		t.Fatalf("a reserved random candidate must never reach the store, got %d calls", store.calls)
+	}
+}
+
 func TestCreate_RejectsNonHTTPLongURL(t *testing.T) {
 	store := newFakeStore("abc", 5)
 	c := &Service{Store: store}

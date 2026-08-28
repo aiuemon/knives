@@ -21,7 +21,12 @@ go build ./...
 go test ./...
 ```
 
-PostgreSQL / Redis はローカルの Docker(`docker-compose.yaml`)で用意する想定。環境変数は `.env.example` を参照。
+```sh
+cp .env.example .env
+docker compose up --build   # http://knives.localhost:8000/app/
+```
+
+`docker-compose.yaml` は PostgreSQL / Redis に加え、`api`・`redirect`・`worker`・`web` とリバースプロキシ(nginx)を1つのFQDN配下でまとめて起動する(1.4節)。環境変数は `.env.example` を参照。
 
 ## 開発フロー
 

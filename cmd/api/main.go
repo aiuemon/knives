@@ -26,6 +26,17 @@ import (
 	"github.com/aiuemon/knives/internal/storage"
 )
 
+// webAppPathPrefix is where web/ (the SPA) is mounted under
+// WEB_PUBLIC_BASE_URL once api/redirect/web are unified behind a single
+// FQDN via a reverse proxy (deploy/nginx/nginx.conf) — the SPA's own
+// root-level routes (e.g. /login) would otherwise collide with short-URL
+// redirect codes served at the same path root by cmd/redirect. This is
+// only used to build links into the SPA (email links, OIDC/SAML post-login
+// redirects); WEB_PUBLIC_BASE_URL itself must stay origin-only (no path)
+// since it also feeds webauthn.Config.RPOrigins below, which requires an
+// exact scheme+host+port match with no path component.
+const webAppPathPrefix = "/app"
+
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
@@ -116,8 +127,8 @@ func main() {
 		Store:           authStore,
 		Mailer:          mailer,
 		AuthSettings:    authSettingsStore,
-		ConfirmBaseURL:  webPublicBaseURL + "/auth/confirm-link",
-		PendingLinksURL: webPublicBaseURL + "/pending-links",
+		ConfirmBaseURL:  webPublicBaseURL + webAppPathPrefix + "/auth/confirm-link",
+		PendingLinksURL: webPublicBaseURL + webAppPathPrefix + "/pending-links",
 	}
 
 	samlLogin := &auth.SAMLLoginService{
@@ -167,7 +178,7 @@ func main() {
 			Mailer:        mailer,
 			Resolver:      resolver,
 			Credentials:   credentialStore,
-			VerifyBaseURL: webPublicBaseURL + "/auth/local/verify-email",
+			VerifyBaseURL: webPublicBaseURL + webAppPathPrefix + "/auth/local/verify-email",
 		},
 		authSettings:        authSettingsStore,
 		permissions:         permissionStore,

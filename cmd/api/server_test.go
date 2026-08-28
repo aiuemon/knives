@@ -2959,7 +2959,7 @@ func TestHandleSAMLACS_LoggedInSetsSessionAndRedirectsHome(t *testing.T) {
 	if rec.Code != http.StatusFound {
 		t.Fatalf("expected 302, got %d: %s", rec.Code, rec.Body.String())
 	}
-	if loc := rec.Header().Get("Location"); loc != "http://localhost:5173/" {
+	if loc := rec.Header().Get("Location"); loc != "http://localhost:5173/app/" {
 		t.Fatalf("expected a redirect to the SPA home, got %s", loc)
 	}
 	cookies := rec.Result().Cookies()
@@ -2986,7 +2986,7 @@ func TestHandleSAMLACS_PendingConfirmationRedirectsWithNotice(t *testing.T) {
 	if rec.Code != http.StatusFound {
 		t.Fatalf("expected 302, got %d", rec.Code)
 	}
-	if loc := rec.Header().Get("Location"); loc != "http://localhost:5173/login?notice=saml_pending_confirmation" {
+	if loc := rec.Header().Get("Location"); loc != "http://localhost:5173/app/login?notice=saml_pending_confirmation" {
 		t.Fatalf("unexpected redirect location: %s", loc)
 	}
 	if len(rec.Result().Cookies()) != 0 {
@@ -3012,7 +3012,7 @@ func TestHandleSAMLACS_InvalidResponseRedirectsWithErrorNotFound(t *testing.T) {
 	if rec.Code != http.StatusFound {
 		t.Fatalf("expected 302, got %d", rec.Code)
 	}
-	if loc := rec.Header().Get("Location"); loc != "http://localhost:5173/login?error=saml_failed" {
+	if loc := rec.Header().Get("Location"); loc != "http://localhost:5173/app/login?error=saml_failed" {
 		t.Fatalf("unexpected redirect location: %s", loc)
 	}
 }
@@ -3297,7 +3297,7 @@ func TestHandleOIDCCallback_LoggedInSetsSessionAndRedirectsHome(t *testing.T) {
 	if rec.Code != http.StatusFound {
 		t.Fatalf("expected 302, got %d: %s", rec.Code, rec.Body.String())
 	}
-	if loc := rec.Header().Get("Location"); loc != "http://localhost:5173/" {
+	if loc := rec.Header().Get("Location"); loc != "http://localhost:5173/app/" {
 		t.Fatalf("expected a redirect to the SPA home, got %s", loc)
 	}
 	cookies := rec.Result().Cookies()
@@ -3323,7 +3323,7 @@ func TestHandleOIDCCallback_PendingConfirmationRedirectsWithNotice(t *testing.T)
 	if rec.Code != http.StatusFound {
 		t.Fatalf("expected 302, got %d", rec.Code)
 	}
-	if loc := rec.Header().Get("Location"); loc != "http://localhost:5173/login?notice=oidc_pending_confirmation" {
+	if loc := rec.Header().Get("Location"); loc != "http://localhost:5173/app/login?notice=oidc_pending_confirmation" {
 		t.Fatalf("unexpected redirect location: %s", loc)
 	}
 	if len(rec.Result().Cookies()) != 0 {
@@ -3348,7 +3348,7 @@ func TestHandleOIDCCallback_InvalidResponseRedirectsWithError(t *testing.T) {
 	if rec.Code != http.StatusFound {
 		t.Fatalf("expected 302, got %d", rec.Code)
 	}
-	if loc := rec.Header().Get("Location"); loc != "http://localhost:5173/login?error=oidc_failed" {
+	if loc := rec.Header().Get("Location"); loc != "http://localhost:5173/app/login?error=oidc_failed" {
 		t.Fatalf("unexpected redirect location: %s", loc)
 	}
 }

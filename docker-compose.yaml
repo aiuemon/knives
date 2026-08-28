@@ -1,0 +1,125 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: knives
+      POSTGRES_PASSWORD: knives
+      POSTGRES_DB: knives
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U knives -d knives"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # DATABASE_URL/REDIS_ADDRは.envの値(localhost向け、素のGoバイナリを
+  # ホストで直接動かす開発フロー用)を使わず、compose内のサービス名を指す
+  # 既定値をここで直接持つ。.envでこれらのキーに値を入れていても、
+  # サービスごとのenvironment:がenv_fileの後に評価されるため上書きされる。
+  migrate:
+    image: migrate/migrate:v4.17.1
+    volumes:
+      - ./db/migrations:/migrations:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      [
+        "-path",
+        "/migrations",
+        "-database",
+        "postgres://knives:knives@postgres:5432/knives?sslmode=disable",
+        "up",
+      ]
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        TARGET: api
+    env_file: .env
+    environment:
+      API_LISTEN_ADDR: ":8080"
+      DATABASE_URL: "postgres://knives:knives@postgres:5432/knives?sslmode=disable"
+      REDIS_ADDR: "redis:6379"
+      WEB_PUBLIC_BASE_URL: "http://knives.localhost:${PROXY_PORT:-8000}"
+      API_PUBLIC_BASE_URL: "http://knives.localhost:${PROXY_PORT:-8000}"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  redirect:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        TARGET: redirect
+    env_file: .env
+    environment:
+      REDIRECT_LISTEN_ADDR: ":8081"
+      DATABASE_URL: "postgres://knives:knives@postgres:5432/knives?sslmode=disable"
+      REDIS_ADDR: "redis:6379"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        TARGET: worker
+    env_file: .env
+    environment:
+      DATABASE_URL: "postgres://knives:knives@postgres:5432/knives?sslmode=disable"
+      REDIS_ADDR: "redis:6379"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  web:
+    build:
+      context: web
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      VITE_REDIRECT_BASE_URL: "http://knives.localhost:${PROXY_PORT:-8000}"
+      PROXY_PORT: "${PROXY_PORT:-8000}"
+    # ホスト側のソースをマウントしてHMRを実際に機能させる
+    # (マウントしないとイメージビルド時点のソースがコンテナに焼き
+    # 込まれたままになり、pnpm devがホストでの編集を検知できない)。
+    # node_modulesは無名ボリュームでコンテナ内のものを維持し、ホストの
+    # (存在しないか、OSが異なる)node_modulesで上書きされないようにする。
+    volumes:
+      - ./web:/app
+      - /app/node_modules
+
+  proxy:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "${PROXY_PORT:-8000}:80"
+    depends_on:
+      - api
+      - redirect
+      - web
+
+volumes:
+  postgres-data:

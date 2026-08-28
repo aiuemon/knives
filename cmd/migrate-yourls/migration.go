@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aiuemon/knives/internal/auth"
+	"github.com/aiuemon/knives/internal/shorturl"
 	"github.com/aiuemon/knives/internal/storage"
 )
 
@@ -82,6 +83,17 @@ func runMigration(
 			}
 			ownerID = owner.ID
 			userCache[normalizeEmail(ownerEmail)] = ownerID
+		}
+
+		// api/redirect/webを1つのFQDNへ統合する構成(docs/architecture.md
+		// 1.4節)ではapi/appがリバースプロキシに先取りされ、
+		// short_codeとして使ってもcmd/redirectに届かない。native作成
+		// (internal/shorturl.Service.Create)では既に弾いているので、
+		// 移行データにも同じ制約を適用する。
+		if shorturl.IsReservedShortCode(row.Keyword) {
+			slog.Warn("skipped: short_code is reserved", "keyword", row.Keyword)
+			s.Skipped++
+			continue
 		}
 
 		shortURLID, err := target.InsertMigratedShortURL(ctx, storage.MigratedShortURLInput{
