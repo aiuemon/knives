@@ -10,7 +10,7 @@ require (
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/go-webauthn/webauthn v0.17.4
 	github.com/google/uuid v1.6.0
-	github.com/jackc/pgx/v5 v5.10.0
+	github.com/jackc/pgx/v5 v5.11.0
 	github.com/mileusna/useragent v1.3.5
 	github.com/oschwald/geoip2-golang v1.13.0
 	github.com/redis/go-redis/v9 v9.22.0
